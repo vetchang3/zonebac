@@ -20,6 +20,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-import-cont
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-deepseek-api.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-generator.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-meta-box.php';
+new Zonebac_Question_Meta_Box();
 
 
 class ZonebacLMS
@@ -55,19 +56,12 @@ class ZonebacLMS
 
         add_action('wp_enqueue_scripts', [$this, 'enqueue_public_scripts']);
 
+        add_filter('query_vars', function ($vars) {
+            $vars[] = 'zb_question_id';
+            return $vars;
+        });
     }
 
-    public function enqueue_public_scripts()
-    {
-        if (isset($_GET['preview_question'])) {
-            wp_enqueue_script('mathjax-front', 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js', [], null, true);
-            wp_add_inline_script('mathjax-front', "
-            window.MathJax = {
-                tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] }
-            };
-        ");
-        }
-    }
     /**
      * Le "Dispatcher" : Vérifie si on peut lancer un nouveau job
      */
@@ -122,9 +116,7 @@ class ZonebacLMS
                 $generator->process_generation_queue($job_id, $notion_id);
             }
         }
-
     }
-
 }
 
 new ZonebacLMS();

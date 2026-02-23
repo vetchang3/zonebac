@@ -4,6 +4,17 @@ class Zonebac_Admin_Controller
 {
     public function __construct()
     {
+        // LOGIQUE DE SESSION : On ne démarre que si nécessaire
+        if (is_admin() && !session_id() && !headers_sent()) {
+            session_start();
+        }
+
+        if (is_admin()) {
+            if (isset($_GET['zb_question_id'])) {
+                $_SESSION['zb_last_question_id'] = intval($_GET['zb_question_id']);
+            }
+        }
+
         add_action('admin_menu', [$this, 'add_admin_pages']);
         add_action('admin_post_zb_save_settings', [$this, 'handle_save_settings']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
@@ -11,25 +22,25 @@ class Zonebac_Admin_Controller
         add_action('admin_init', [$this, 'handle_early_actions']);
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
 
-
-        add_action('wp_enqueue_scripts', function () {
-            if (isset($_GET['preview_question'])) {
-                wp_enqueue_script('mathjax-front', 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js', [], null, true);
-                wp_add_inline_script('mathjax-front', "
-            window.MathJax = {
-                tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] }
-            };
-        ");
-            }
-        });
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_mathjax_front']);
 
         // Autorise WordPress à conserver ce paramètre dans l'URL de l'admin
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
         });
-
     }
 
+    public function enqueue_mathjax_front()
+    {
+        if (isset($_GET['preview_question'])) {
+            wp_enqueue_script('mathjax-front', 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js', [], null, true);
+            wp_add_inline_script('mathjax-front', "
+                window.MathJax = {
+                    tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] }
+                };
+            ");
+        }
+    }
 
     public function render_question_preview_front($content)
     {
@@ -57,7 +68,7 @@ class Zonebac_Admin_Controller
                     $border_color = $is_correct ? '#22c55e' : '#e2e8f0';
                     $text_color = $is_correct ? '#166534' : '#475569';
 
-                    $html .= '<div style="padding: 15px; border-radius: 8px; border: 2px solid '.$border_color.'; background: '.$bg_color.'; color: '.$text_color.';">';
+                    $html .= '<div style="padding: 15px; border-radius: 8px; border: 2px solid ' . $border_color . '; background: ' . $bg_color . '; color: ' . $text_color . ';">';
                     $html .= '<strong style="margin-right: 10px;">' . chr(65 + $key) . ')</strong> ' . $opt . '</div>';
                 }
                 $html .= '</div>';
@@ -98,8 +109,8 @@ class Zonebac_Admin_Controller
         }
     }
     /**
- * Charge les assets CSS et JS avec un versionnage basé sur la date de modification du fichier
- */
+     * Charge les assets CSS et JS avec un versionnage basé sur la date de modification du fichier
+     */
     public function enqueue_admin_assets($hook)
     {
         // On ne charge les scripts que sur les pages du plugin pour optimiser les performances
@@ -151,7 +162,6 @@ class Zonebac_Admin_Controller
             svg: { fontCache: 'global' }
         };
     ");
-
     }
 
     public function add_admin_pages()
@@ -204,11 +214,8 @@ class Zonebac_Admin_Controller
 
 
         if (isset($_GET['scheduled'])) {
-            $this->message = "Le traitement a été lancé avec succès via DeepSeek.";
-            $this->message_type = "updated";
-
             $message =
-            "Le traitement a été lancé avec succès via DeepSeek.";
+                "Le traitement a été lancé avec succès via DeepSeek.";
             $message_type = "updated";
         }
 
@@ -242,12 +249,16 @@ class Zonebac_Admin_Controller
         $data = [];
         if ($type === 'notion') {
             $results = get_posts(['post_type' => 'notion', 'numberposts' => -1, 'tax_query' => [['taxonomy' => 'chapitre', 'field' => 'term_id', 'terms' => $parent_id]]]);
-            $data = array_map(function ($p) { return ['id' => $p->ID, 'name' => $p->post_title]; }, $results);
+            $data = array_map(function ($p) {
+                return ['id' => $p->ID, 'name' => $p->post_title];
+            }, $results);
         } else {
             $taxonomy = ($type === 'matiere') ? 'matiere' : 'chapitre';
             $terms = get_terms(['taxonomy' => $taxonomy, 'hide_empty' => false, 'meta_query' => [['key' => 'parent_id', 'value' => $parent_id]]]);
             if (!is_wp_error($terms)) {
-                $data = array_map(function ($t) { return ['id' => $t->term_id, 'name' => $t->name]; }, $terms);
+                $data = array_map(function ($t) {
+                    return ['id' => $t->term_id, 'name' => $t->name];
+                }, $terms);
             }
         }
         return new WP_REST_Response($data, 200);
