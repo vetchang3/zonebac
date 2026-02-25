@@ -4,7 +4,9 @@ if (!class_exists('WP_List_Table')) {
     require_once(ABSPATH . 'wp-admin/includes/class-wp-list-table.php');
 }
 
-class Zonebac_Job_List_Table extends WP_List_Table
+require_once 'class-base-job-table.php';
+
+class Zonebac_Job_List_Table extends Zonebac_Base_Job_Table
 {
     public function __construct()
     {
@@ -38,15 +40,6 @@ class Zonebac_Job_List_Table extends WP_List_Table
         );
     }
 
-    // 2. Actions groupées (Bulk Actions)
-    protected function get_bulk_actions()
-    {
-        return array(
-            'bulk-delete' => 'Supprimer définitivement',
-            'bulk-run'    => 'Lancer les tâches sélectionnées'
-        );
-    }
-
     // 5. Actions au survol (Row Actions) sur la colonne titre
     public function column_title($item)
     {
@@ -65,64 +58,6 @@ class Zonebac_Job_List_Table extends WP_List_Table
         }
 
         return sprintf('<strong>%s</strong> %s', esc_html($title), $this->row_actions($actions));
-    }
-
-    // Point 5 : Ajouter le bouton Nettoyer au-dessus du tableau
-    public function extra_tablenav($which)
-    {
-        if ($which == "top") {
-            echo '<div class="alignleft actions">';
-            echo sprintf('<a href="?page=%s&action=cleanup" class="button secondary" onclick="return confirm(\'Supprimer tous les jobs terminés ?\')">Nettoyer les jobs terminés</a>', $_REQUEST['page']);
-            echo '</div>';
-        }
-    }
-
-    /**
-     * Rendu stylisé du statut avec couleurs
-     */
-    public function column_status($item)
-    {
-        $status = strtoupper($item['status']);
-
-        // Définition des styles professionnels
-        $styles = [
-            'PENDING'    => 'background-color: #fef3c7; color: #92400e; border: 1px solid #f59e0b;',
-            'PROCESSING' => 'background-color: #e0f2fe; color: #075985; border: 1px solid #0ea5e9;',
-            'COMPLETED'  => 'background-color: #dcfce7; color: #166534; border: 1px solid #22c55e;',
-            'FAILED'     => 'background-color: #fee2e2; color: #991b1b; border: 1px solid #ef4444;',
-        ];
-
-        $current_style = isset($styles[$status]) ? $styles[$status] : 'background-color: #f3f4f6; color: #374151;';
-        $loader = '';
-
-        // Si c'est en cours, on ajoute le spinner de WordPress
-        if ($status === 'PROCESSING') {
-            $loader = '<span class="spinner is-active" style="float:none; margin:0 5px 0 0; vertical-align:middle;"></span>';
-        }
-
-        return sprintf(
-            '<span style="padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 11px; display: inline-block; %s">%s %s</span>',
-            $current_style,
-            $loader,
-            $status
-        );
-    }
-
-    public function column_cb($item)
-    {
-        return sprintf('<input type="checkbox" name="job[]" value="%d" />', $item['id']);
-    }
-
-    public function column_default($item, $column_name)
-    {
-        switch ($column_name) {
-            case 'status':
-                $val = strtoupper($item['status']);
-                $class = ($val === 'COMPLETED') ? 'status-completed' : 'status-pending';
-                return sprintf('<span class="status-badge %s">%s</span>', $class, $val);
-            default:
-                return isset($item[$column_name]) ? $item[$column_name] : '-';
-        }
     }
 
     public function prepare_items()
@@ -208,7 +143,6 @@ class Zonebac_Job_List_Table extends WP_List_Table
                 'La génération a été lancée en arrière-plan. Elle sera complétée d\'ici quelques instants.',
                 'updated'
             );
-
         }
     }
 }

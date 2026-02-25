@@ -22,6 +22,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-ge
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-meta-box.php';
 new Zonebac_Question_Meta_Box();
 
+require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-exercise-generator.php';
 
 class ZonebacLMS
 {
@@ -41,6 +42,9 @@ class ZonebacLMS
             // AJOUTER CES DEUX LIGNES :
             // Elles font le pont entre le formulaire et la méthode de traitement
             add_action('admin_post_zb_do_generation', [$generator, 'handle_generation_request']);
+
+            $ex_generator = new Zonebac_Exercise_Generator();
+            add_action('admin_post_zb_do_exercise_generation', [$ex_generator, 'handle_exercise_request']);
         }
 
         add_action('zb_async_generation_event', [$this, 'zb_execute_background_generation']);
@@ -54,38 +58,49 @@ class ZonebacLMS
         }
         add_action('zb_check_pending_jobs_cron', [$this, 'dispatch_next_job']);
 
-        add_action('wp_enqueue_scripts', [$this, 'enqueue_public_scripts']);
 
         add_filter('query_vars', function ($vars) {
             $vars[] = 'zb_question_id';
             return $vars;
         });
+
+        add_action('zb_async_exercise_event', [$this, 'zb_execute_background_exercise'], 10, 2);
     }
 
-    /**
-     * Le "Dispatcher" : Vérifie si on peut lancer un nouveau job
-     */
     public function dispatch_next_job()
     {
         global $wpdb;
-        $table = $wpdb->prefix . 'zb_generation_jobs';
 
-        // 1. On vérifie si un job est DÉJÀ en cours de traitement
-        $is_processing = $wpdb->get_var("SELECT COUNT(*) FROM $table WHERE status = 'processing'");
+        // PROTECTION : On considère qu'un job bloqué plus de 30 min est en échec
+        $wpdb->query("UPDATE {$wpdb->prefix}zb_exercise_jobs SET status = 'failed' WHERE status = 'processing' AND created_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)");
+        $wpdb->query("UPDATE {$wpdb->prefix}zb_generation_jobs SET status = 'failed' WHERE status = 'processing' AND created_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)");
 
-        if ($is_processing > 0) {
-            // Un job tourne déjà, on ne fait rien pour respecter la file d'attente
+        // Vérification des jobs réellement actifs
+        $is_processing_q = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}zb_generation_jobs WHERE status = 'processing'");
+        $is_processing_ex = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}zb_exercise_jobs WHERE status = 'processing'");
+
+        if ($is_processing_q > 0 || $is_processing_ex > 0) return;
+
+        // Priorité aux Exercices
+        $next_ex = $wpdb->get_row("SELECT id, notion_id FROM {$wpdb->prefix}zb_exercise_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1");
+        if ($next_ex) {
+            wp_schedule_single_event(time(), 'zb_async_exercise_event', [$next_ex->id, $next_ex->notion_id]);
+            spawn_cron();
             return;
         }
 
-        // 2. On récupère le prochain job en attente (le plus ancien)
-        $next_job = $wpdb->get_row("SELECT id FROM $table WHERE status = 'pending' ORDER BY id ASC LIMIT 1");
-
-        if ($next_job) {
-            // On le lance immédiatement
-            $wpdb->update($table, ['status' => 'processing'], ['id' => $next_job->id]);
-            wp_schedule_single_event(time(), 'zb_async_generation_event', array($next_job->id));
+        // Sinon, Questions simples
+        $next_q = $wpdb->get_row("SELECT id FROM {$wpdb->prefix}zb_generation_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1");
+        if ($next_q) {
+            wp_schedule_single_event(time(), 'zb_async_generation_event', [$next_q->id]);
             spawn_cron();
+        }
+    }
+    public function zb_execute_background_exercise($job_id, $notion_id)
+    {
+        if (class_exists('Zonebac_Exercise_Generator')) {
+            $ex_gen = new Zonebac_Exercise_Generator();
+            $ex_gen->process_exercise_generation($job_id, $notion_id);
         }
     }
 

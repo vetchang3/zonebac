@@ -28,6 +28,8 @@ class Zonebac_Admin_Controller
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
         });
+
+        add_action('admin_post_zb_save_exercise_edit', [$this, 'handle_save_exercise_edit']);
     }
 
     public function enqueue_mathjax_front()
@@ -44,66 +46,134 @@ class Zonebac_Admin_Controller
 
     public function render_question_preview_front($content)
     {
+        global $wpdb;
+
+        // --- CAS 1 : PREVIEW D'UNE QUESTION UNIQUE ---
         if (isset($_GET['preview_question'])) {
-            global $wpdb;
             $q_id = intval($_GET['preview_question']);
             $table = $wpdb->prefix . 'zb_questions';
-
             $question = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $q_id));
 
             if ($question) {
                 $data = json_decode($question->question_data, true);
 
-                // On vide tout contenu précédent pour être sûr de ne pas avoir de doublons
-                $html = '<div class="zb-preview-container" style="border: 2px solid #0ea5e9; padding: 25px; border-radius: 12px; background: #fff; max-width: 800px; margin: 20px auto; box-shadow: 0 4px 15px rgba(0,0,0,0.1); font-family: sans-serif;">';
-                $html .= '<h2 style="color: #0ea5e9; border-bottom: 2px solid #e0f2fe; padding-bottom: 10px; margin-bottom: 20px;">Aperçu de la Question Générée</h2>';
+                ob_start();
+                echo '<div class="zb-preview-container" style="background:#f9f9f9; padding:20px; border-radius:10px; border:1px solid #ddd; margin:20px 0;">';
+                echo '<span style="background:#0073aa; color:#fff; padding:3px 8px; border-radius:5px; font-size:12px;">Prévisualisation Question #' . $q_id . '</span>';
+                echo '<h2 style="margin-top:15px;">' . wpautop($data['question']) . '</h2>';
 
-                // Énoncé avec support LaTeX
-                $html .= '<div class="zb-question-text" style="font-size: 1.3em; line-height: 1.6; color: #1e293b; margin-bottom: 25px;">' . $data['question'] . '</div>';
-
-                $html .= '<div style="display: grid; gap: 12px; margin-bottom: 30px;">';
-                foreach ($data['options'] as $key => $opt) {
-                    $is_correct = ($opt === $data['answer']);
-                    $bg_color = $is_correct ? '#dcfce7' : '#f8fafc';
-                    $border_color = $is_correct ? '#22c55e' : '#e2e8f0';
-                    $text_color = $is_correct ? '#166534' : '#475569';
-
-                    $html .= '<div style="padding: 15px; border-radius: 8px; border: 2px solid ' . $border_color . '; background: ' . $bg_color . '; color: ' . $text_color . ';">';
-                    $html .= '<strong style="margin-right: 10px;">' . chr(65 + $key) . ')</strong> ' . $opt . '</div>';
+                echo '<ul style="list-style:none; padding-left:0;">';
+                foreach ($data['options'] as $index => $option) {
+                    $is_correct = ($option === $data['answer']);
+                    $style = $is_correct ? 'border:2px solid #46b450; background:#edfaef;' : 'border:1px solid #ccc;';
+                    echo '<li style="padding:10px; margin-bottom:10px; border-radius:5px; ' . $style . '">';
+                    echo '<strong>' . chr(65 + $index) . '.</strong> ' . esc_html($option);
+                    if ($is_correct) echo ' ✅ (Bonne réponse)';
+                    echo '</li>';
                 }
-                $html .= '</div>';
+                echo '</ul>';
 
-                $html .= '<div style="background: #eff6ff; border-left: 5px solid #3b82f6; padding: 20px; border-radius: 4px;">';
-                $html .= '<h4 style="margin-top: 0; color: #1e40af;">Explication Pédagogique</h4>';
-                $html .= '<div style="font-style: italic; color: #1e3a8a;">' . $data['explanation'] . '</div>';
-                $html .= '</div></div>';
+                if (!empty($data['explanation'])) {
+                    echo '<div style="background:#e1f0fa; padding:15px; border-left:4px solid #0073aa; margin-top:20px;">';
+                    echo '<strong>Explication :</strong><br>' . wpautop($data['explanation']);
+                    echo '</div>';
+                }
+                echo '</div>';
 
-                // IMPORTANT : On retourne le HTML et on arrête le reste du contenu
-                return $html;
+                return ob_get_clean();
             }
         }
+
+        // --- CAS 2 : PREVIEW D'UN EXERCICE COMPLET ---
+        if (isset($_GET['preview_exercise'])) {
+            $ex_id = intval($_GET['preview_exercise']);
+            $table = $wpdb->prefix . 'zb_exercises';
+            $exercise = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $ex_id));
+
+            if ($exercise) {
+                $questions = json_decode($exercise->exercise_data, true);
+
+                ob_start();
+                echo '<div class="zb-exercise-preview" style="max-width:800px; margin:auto;">';
+                echo '<h1>' . esc_html($exercise->title) . '</h1>';
+                echo '<div class="zb-subject" style="background:#fff; padding:20px; border:1px solid #eee; border-radius:8px; margin-bottom:30px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">';
+                echo wpautop($exercise->subject_text);
+                echo '</div>';
+
+                foreach ($questions as $i => $q) {
+                    echo '<div class="zb-q-item" style="margin-bottom:40px; padding:20px; background:#fdfdfd; border-left:5px solid #0073aa; box-shadow:0 2px 4px rgba(0,0,0,0.05);">';
+                    echo '<h3>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#666;">(' . esc_html($q['type'] ?? 'single') . ')</span></h3>';
+                    echo '<p>' . wpautop($q['question']) . '</p>';
+
+                    echo '<div class="zb-options-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
+                    foreach ($q['options'] as $idx => $opt) {
+                        // Logique de vérification de la réponse (string ou array)
+                        $is_correct = false;
+                        if (is_array($q['answer'])) {
+                            $is_correct = in_array($opt, $q['answer']);
+                        } else {
+                            $is_correct = ($opt === $q['answer']);
+                        }
+
+                        $bg = $is_correct ? '#dcfce7' : '#fff';
+                        $border = $is_correct ? '#22c55e' : '#ddd';
+
+                        echo '<div style="padding:10px; border:1px solid ' . $border . '; background:' . $bg . '; border-radius:5px;">';
+                        echo '<strong>' . chr(65 + $idx) . '.</strong> ' . esc_html($opt);
+                        echo '</div>';
+                    }
+                    echo '</div>';
+
+                    echo '<div style="margin-top:15px; font-size:0.9em; color:#555; font-style:italic;">';
+                    echo '<strong>Correction :</strong> ' . wpautop($q['explanation']);
+                    echo '</div>';
+                    echo '</div>';
+                }
+                echo '</div>';
+
+                return ob_get_clean();
+            }
+        }
+
         return $content;
     }
+
     public function handle_early_actions()
     {
         global $wpdb;
 
-        // Vérification stricte de la page et de l'action pour ne pas interférer ailleurs
-        if (isset($_GET['page']) && $_GET['page'] === 'zonebac-questions' && isset($_GET['action']) && $_GET['action'] === 'cleanup') {
+        // --- 1. NETTOYAGE DES JOBS DE QUESTIONS ---
+        if (isset($_GET['action']) && $_GET['action'] === 'cleanup_questions') {
             $table_jobs = $wpdb->prefix . 'zb_generation_jobs';
-
-            // Suppression sécurisée
             $wpdb->query("DELETE FROM $table_jobs WHERE status IN ('completed', 'failed')");
 
-            // Redirection vers la page sans l'action pour simuler le rechargement
             wp_redirect(admin_url('admin.php?page=zonebac-questions&cleanup_done=1'));
             exit;
         }
 
+        // --- 2. NETTOYAGE DES JOBS D'EXERCICES ---
+        if (isset($_GET['action']) && $_GET['action'] === 'cleanup_exercises') {
+            $table_jobs = $wpdb->prefix . 'zb_exercise_jobs';
+            $wpdb->query("DELETE FROM $table_jobs WHERE status IN ('completed', 'failed')");
+
+            wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&cleanup_done=1'));
+            exit;
+        }
+
+        // --- 3. SUPPRESSION D'UNE QUESTION DANS LA BANQUE ---
         if (isset($_GET['page']) && $_GET['page'] === 'zonebac-bank' && isset($_GET['action'])) {
             if ($_GET['action'] === 'delete' && isset($_GET['id'])) {
                 $wpdb->delete($wpdb->prefix . 'zb_questions', ['id' => intval($_GET['id'])]);
                 wp_redirect(admin_url('admin.php?page=zonebac-bank&deleted=1'));
+                exit;
+            }
+        }
+
+        // --- 4. SUPPRESSION D'UN EXERCICE DANS LA BANQUE ---
+        if (isset($_GET['page']) && $_GET['page'] === 'zonebac-ex-bank' && isset($_GET['action'])) {
+            if ($_GET['action'] === 'delete' && isset($_GET['id'])) {
+                $wpdb->delete($wpdb->prefix . 'zb_exercises', ['id' => intval($_GET['id'])]);
+                wp_redirect(admin_url('admin.php?page=zonebac-ex-bank&deleted=1'));
                 exit;
             }
         }
@@ -172,6 +242,10 @@ class Zonebac_Admin_Controller
         // Sous-menu Banque
         add_submenu_page('zonebac-lms', 'Générateur de Questions', 'Générateur de Questions', 'manage_options', 'zonebac-questions', [$this, 'render_questions_view']);
         add_submenu_page('zonebac-lms', 'Banque de questions', 'Banque de questions', 'manage_options', 'zonebac-bank', [$this, 'render_bank_view']);
+
+        add_submenu_page('zonebac-lms', 'Générateur d\'Exercices', 'Générateur d\'Exercices', 'manage_options', 'zonebac-ex-gen', [$this, 'render_ex_generator_view']);
+        add_submenu_page('zonebac-lms', 'Banque d\'Exercices', 'Banque d\'Exercices', 'manage_options', 'zonebac-ex-bank', [$this, 'render_ex_bank_view']);
+        add_submenu_page(null, 'Éditer l\'Exercice', 'Éditer l\'Exercice', 'manage_options', 'zonebac-ex-edit', [$this, 'render_ex_edit_view']);
     }
 
     public function render_bank_view()
@@ -262,5 +336,111 @@ class Zonebac_Admin_Controller
             }
         }
         return new WP_REST_Response($data, 200);
+    }
+
+    public function render_ex_generator_view()
+    {
+        global $wpdb;
+        $classes = get_terms(['taxonomy' => 'classe', 'hide_empty' => false]);
+
+        // LOGIQUE DE NOTIFICATION IDENTIQUE AUX QUESTIONS
+        $message = '';
+        $message_type = '';
+
+        if (isset($_GET['success'])) {
+            $message = "La génération de l'exercice a été lancée avec succès via DeepSeek.";
+            $message_type = "updated"; // Vert
+        }
+
+        if (isset($_GET['cleanup_done'])) {
+            $message = "L'historique des exercices terminés a été nettoyé.";
+            $message_type = "updated";
+        }
+
+        // Initialisation de la table
+        require_once plugin_dir_path(__FILE__) . 'class-exercise-job-table.php';
+        $ex_job_table = new Zonebac_Exercise_Job_Table();
+        $ex_job_table->prepare_items();
+
+        include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-generator-page.php';
+    }
+
+    public function render_ex_bank_view()
+    {
+        // Chargement de la table
+        require_once plugin_dir_path(__FILE__) . 'class-exercise-bank-table.php';
+        $ex_bank_table = new Zonebac_Exercise_Bank_Table();
+
+        // Inclusion de la vue que nous avons créée précédemment
+        include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-bank-page.php';
+    }
+
+    /**
+     * Affiche la page d'édition de l'exercice
+     */
+    public function render_ex_edit_view()
+    {
+        global $wpdb;
+        $ex_id = intval($_GET['id']);
+        $exercise = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}zb_exercises WHERE id = %d", $ex_id));
+
+        if (!$exercise) {
+            wp_die("Exercice introuvable.");
+        }
+
+        $questions = json_decode($exercise->exercise_data, true);
+        include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-edit-page.php';
+    }
+
+    /**
+     * Gère la sauvegarde de l'édition (via admin-post.php)
+     */
+    public function handle_save_exercise_edit()
+    {
+        check_admin_referer('zb_edit_ex_nonce');
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        global $wpdb;
+        $ex_id = intval($_POST['exercise_id']);
+        $subject_text = wp_unslash($_POST['subject_text']); // On retire les slashes magiques pour LaTeX
+
+        $updated_questions = [];
+        foreach ($_POST['questions'] as $q_data) {
+            $options = array_map('wp_unslash', $q_data['options']);
+            $current_answer = '';
+
+            if ($q_data['type'] === 'multi' && isset($q_data['correct_indexes'])) {
+                // On récupère toutes les options correspondant aux cases cochées
+                $current_answer = [];
+                foreach ($q_data['correct_indexes'] as $idx) {
+                    $current_answer[] = $options[intval($idx)];
+                }
+            } else {
+                // Choix unique classique
+                $idx = intval($q_data['correct_index'] ?? 0);
+                $current_answer = $options[$idx] ?? '';
+            }
+
+            $updated_questions[] = [
+                'type'     => $q_data['type'],
+                'question' => sanitize_textarea_field(wp_unslash($q_data['question'])),
+                'options'  => array_map('sanitize_text_field', $options),
+                'answer'   => $current_answer, // Stocké en array pour le multi, string pour le single
+                'explanation' => sanitize_textarea_field(wp_unslash($q_data['explanation'])),
+                'difficulty'  => 'Moyen'
+            ];
+        }
+
+        $wpdb->update(
+            $wpdb->prefix . 'zb_exercises',
+            [
+                'subject_text'  => sanitize_textarea_field($subject_text),
+                'exercise_data' => json_encode($updated_questions, JSON_UNESCAPED_UNICODE)
+            ],
+            ['id' => $ex_id]
+        );
+
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-bank&updated=1'));
+        exit;
     }
 }
