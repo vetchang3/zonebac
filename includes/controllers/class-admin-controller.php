@@ -97,12 +97,22 @@ class Zonebac_Admin_Controller
                 echo '<div class="zb-exercise-preview" style="max-width:800px; margin:auto;">';
                 echo '<h1>' . esc_html($exercise->title) . '</h1>';
                 echo '<div class="zb-subject" style="background:#fff; padding:20px; border:1px solid #eee; border-radius:8px; margin-bottom:30px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">';
+
+                // Calcule le total des points de l'exercice
+                $total_points = array_sum(array_column($questions, 'points'));
+                echo '<div style="margin-bottom: 20px; text-align: right; font-weight: bold; color: #0ea5e9;">';
+                echo 'Score total de l\'exercice : ' . $total_points . ' points';
+                echo '</div>';
+
                 echo wpautop($exercise->subject_text);
                 echo '</div>';
 
                 foreach ($questions as $i => $q) {
                     echo '<div class="zb-q-item" style="margin-bottom:40px; padding:20px; background:#fdfdfd; border-left:5px solid #0073aa; box-shadow:0 2px 4px rgba(0,0,0,0.05);">';
-                    echo '<h3>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#666;">(' . esc_html($q['type'] ?? 'single') . ')</span></h3>';
+                    echo '<h3 style="display: flex; justify-content: space-between; align-items: center;">';
+                    echo '<span>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#666;">(' . esc_html($q['type'] ?? 'single') . ')</span></span>';
+                    echo '<span style="font-size:0.7em; background:#f1f5f9; padding:2px 8px; border-radius:5px; border:1px solid #e2e8f0;">' . intval($q['points'] ?? 1) . ' pts</span>';
+                    echo '</h3>';
                     echo '<p>' . wpautop($q['question']) . '</p>';
 
                     echo '<div class="zb-options-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
@@ -424,6 +434,7 @@ class Zonebac_Admin_Controller
             $updated_questions[] = [
                 'type'     => $q_data['type'],
                 'question' => sanitize_textarea_field(wp_unslash($q_data['question'])),
+                'points' => intval($q_data['points']),
                 'options'  => array_map('sanitize_text_field', $options),
                 'answer'   => $current_answer, // Stocké en array pour le multi, string pour le single
                 'explanation' => sanitize_textarea_field(wp_unslash($q_data['explanation'])),

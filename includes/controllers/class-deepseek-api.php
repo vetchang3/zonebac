@@ -189,6 +189,7 @@ class Zonebac_DeepSeek_API
           {
             \"type\": \"single\" | \"multi\",
             \"question\": \"Énoncé lié au sujet\",
+            \"points\": 1 | 3 | 5, -- (1 pour Facile, 3 pour Moyen, 5 pour Difficile)
             \"options\": [\"A\", \"B\", \"C\", \"D\"], -- (5 options si multi)
             \"answer\": \"Texte exact\" | [\"Rép 1\", \"Rép 2\"],
             \"explanation\": \"Explication pédagogique détaillée\",

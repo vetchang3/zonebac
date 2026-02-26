@@ -20,6 +20,16 @@
                     <textarea name="questions[<?php echo $i; ?>][question]" rows="2" style="width:100%"><?php echo esc_textarea($q['question']); ?></textarea>
                 </p>
 
+                <div class="card" style="margin-top: 20px;">
+                    <h3>Question <?php echo ($i + 1); ?> ...</h3>
+                    
+                    <p>
+                        <strong>Points :</strong>
+                        <input type="number" name="questions[<?php echo $i; ?>][points]" value="<?php echo esc_attr($q['points'] ?? 1); ?>" style="width:60px">
+                        <span class="description">(Facile: 1, Moyen: 3, Difficile: 5)</span>
+                    </p>
+                </div>
+
                 <p><strong>Options (Cochez la ou les bonnes réponses) :</strong></p>
                 <?php
                 foreach ($q['options'] as $o_idx => $opt) :
