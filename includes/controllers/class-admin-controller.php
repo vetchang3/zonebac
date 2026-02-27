@@ -2,6 +2,8 @@
 
 class Zonebac_Admin_Controller
 {
+    use Zonebac_Generator_Form_Trait;
+
     public function __construct()
     {
         // LOGIQUE DE SESSION : On ne démarre que si nécessaire
@@ -33,6 +35,7 @@ class Zonebac_Admin_Controller
         add_action('admin_post_zb_save_smart_schedule', [$this, 'handle_save_smart_schedule']);
 
         add_action('admin_post_zb_smart_priority_gen', [$this, 'handle_smart_priority_gen']);
+        add_action('admin_post_zb_run_dispatcher_now', [$this, 'handle_run_dispatcher_now']);
     }
 
     public function enqueue_mathjax_front()
@@ -528,11 +531,16 @@ class Zonebac_Admin_Controller
         if (!current_user_can('manage_options')) wp_die('Accès refusé');
 
         require_once plugin_dir_path(__FILE__) . 'class-smart-engine.php';
-
-        // On appelle la méthode statique
         Zonebac_Smart_Engine::run_auto_dispatcher();
 
-        wp_redirect(add_query_arg(['page' => 'zonebac-ex-gen', 'message' => 'Dispatcher exécuté avec succès !'], admin_url('admin.php')) . '#smart-mode');
+        // On force la redirection avec l'ancre #smart-mode pour éviter la page blanche [cite: 2025-11-16]
+        wp_redirect(add_query_arg([
+            'page'         => 'zonebac-ex-gen',
+            'message'      => 'success', // Ce code sera traduit par la vue
+            'message_type' => 'updated' // 'updated' donne la couleur verte de WordPress
+        ], admin_url('admin.php')) . '#smart-mode');
         exit;
+        // wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#smart-mode'));
+        // exit;
     }
 }

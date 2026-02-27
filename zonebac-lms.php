@@ -14,6 +14,8 @@ require_once plugin_dir_path(__FILE__) . 'includes/models/class-cpt-notion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/models/class-settings-model.php';
 require_once plugin_dir_path(__FILE__) . 'includes/models/class-db-manager.php';
 
+require_once plugin_dir_path(__FILE__) . 'includes/controllers/trait-generator-form.php';
+
 // Chargement des Contrôleurs
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-admin-controller.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-import-controller.php';
@@ -30,52 +32,33 @@ class ZonebacLMS
     public function __construct()
     {
         new Zonebac_CPT_Notion();
-
         register_activation_hook(__FILE__, ['Zonebac_DB_Manager', 'create_tables']);
 
         $admin_controller = new Zonebac_Admin_Controller();
 
         if (is_admin()) {
             new Zonebac_Import_Controller();
-            // On stocke l'instance pour pouvoir appeler ses méthodes
             $generator = new Zonebac_Question_Generator();
-
-            // AJOUTER CES DEUX LIGNES :
-            // Elles font le pont entre le formulaire et la méthode de traitement
             add_action('admin_post_zb_do_generation', [$generator, 'handle_generation_request']);
 
             $ex_generator = new Zonebac_Exercise_Generator();
             add_action('admin_post_zb_do_exercise_generation', [$ex_generator, 'handle_exercise_request']);
         }
 
+        // --- EVENTS & CRONS ---
         add_action('zb_async_generation_event', [$this, 'zb_execute_background_generation']);
-
-        // On écoute la fin d'un traitement pour tenter de lancer le suivant
         add_action('zb_job_completed', [$this, 'dispatch_next_job']);
+        add_action('zb_async_exercise_event', [$this, 'zb_execute_background_exercise'], 10, 2);
 
-        // On garde votre cron de secours mais on le pointe vers dispatch_next_job
         if (!wp_next_scheduled('zb_check_pending_jobs_cron')) {
             wp_schedule_event(time(), 'hourly', 'zb_check_pending_jobs_cron');
         }
         add_action('zb_check_pending_jobs_cron', [$this, 'dispatch_next_job']);
 
-
-        add_filter('query_vars', function ($vars) {
-            $vars[] = 'zb_question_id';
-            return $vars;
-        });
-
-        add_action('zb_async_exercise_event', [$this, 'zb_execute_background_exercise'], 10, 2);
-
-        // Planification de l'événement personnalisé Zonebac
         if (!wp_next_scheduled('zb_smart_cron_hook')) {
             wp_schedule_event(time(), 'hourly', 'zb_smart_cron_hook');
         }
-
-        // Planification de l'événement personnalisé Zonebac
-        if (!wp_next_scheduled('zb_smart_cron_hook')) {
-            wp_schedule_event(time(), 'hourly', 'zb_smart_cron_hook');
-        }
+        // Correction ici : On pointe vers la classe Engine statique
         add_action('zb_smart_cron_hook', ['Zonebac_Smart_Engine', 'run_auto_dispatcher']);
     }
     public static function run_auto_dispatcher()
