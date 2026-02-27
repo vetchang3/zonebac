@@ -23,6 +23,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-me
 new Zonebac_Question_Meta_Box();
 
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-exercise-generator.php';
+require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-smart-engine.php'; // AJOUTE CETTE LIGNE ICI
 
 class ZonebacLMS
 {
@@ -65,6 +66,47 @@ class ZonebacLMS
         });
 
         add_action('zb_async_exercise_event', [$this, 'zb_execute_background_exercise'], 10, 2);
+
+        // Planification de l'événement personnalisé Zonebac
+        if (!wp_next_scheduled('zb_smart_cron_hook')) {
+            wp_schedule_event(time(), 'hourly', 'zb_smart_cron_hook');
+        }
+
+        // Planification de l'événement personnalisé Zonebac
+        if (!wp_next_scheduled('zb_smart_cron_hook')) {
+            wp_schedule_event(time(), 'hourly', 'zb_smart_cron_hook');
+        }
+        add_action('zb_smart_cron_hook', ['Zonebac_Smart_Engine', 'run_auto_dispatcher']);
+    }
+    public static function run_auto_dispatcher()
+    {
+        global $wpdb;
+
+        // 1. Récupérer tous les plannings actifs
+        $schedules = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}zb_smart_schedules");
+
+        foreach ($schedules as $sched) {
+            // 2. Analyser les notions de cette matière
+            $priorities = Zonebac_Smart_Engine::get_priority_notions($sched->matiere_id, $sched->threshold_n);
+
+
+            if (!empty($priorities)) {
+                // 3. Prendre la notion avec le Gap le plus élevé
+                $top_priority = $priorities[0];
+
+                if ($top_priority['gap'] > 0) {
+                    // 4. Créer un job de génération automatique
+                    $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
+                        'notion_id'  => $top_priority['id'],
+                        'count'      => 10, // On avance par lot de 10 pour la stabilité [cite: 2025-11-16]
+                        'status'     => 'pending',
+                        'created_at' => current_time('mysql')
+                    ]);
+
+                    error_log("Zonebac Smart: Job auto créé pour la notion " . $top_priority['name']);
+                }
+            }
+        }
     }
 
     public function dispatch_next_job()
@@ -131,6 +173,57 @@ class ZonebacLMS
                 $generator->process_generation_queue($job_id, $notion_id);
             }
         }
+    }
+
+    public function check_smart_schedules()
+    {
+        global $wpdb;
+        $now = current_time('mysql');
+
+        // Trouver les plannings qui doivent être lancés
+        $due_schedules = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}zb_smart_schedules WHERE is_active = 1 AND next_run <= %s",
+            $now
+        ));
+
+        foreach ($due_schedules as $sched) {
+            $engine = new Zonebac_Smart_Engine();
+            $priorities = $engine->get_priority_notions($sched->matiere_id, $sched->threshold_n);
+
+            if (!empty($priorities)) {
+                // Créer un job pour la notion la plus prioritaire
+                $this->create_automatic_job($priorities[0]['id']);
+            }
+
+            // Mettre à jour la date du prochain run selon la fréquence
+            $this->update_next_run($sched->id, $sched->frequency);
+        }
+    }
+
+    private function create_automatic_job($notion_id)
+    {
+        global $wpdb;
+        $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
+            'notion_id' => $notion_id,
+            'count'     => 10, // Par défaut pour le mode intelligent
+            'status'    => 'pending',
+            'created_at' => current_time('mysql')
+        ]);
+        // On lance le dispatcher pour traiter immédiatement si possible
+        $this->dispatch_next_job();
+    }
+
+    private function update_next_run($sched_id, $frequency)
+    {
+        global $wpdb;
+        $interval = ($frequency === 'daily') ? '+1 day' : (($frequency === 'weekly') ? '+1 week' : '+1 month');
+        $next_run = date('Y-m-d H:i:s', strtotime($interval));
+
+        $wpdb->update(
+            $wpdb->prefix . 'zb_smart_schedules',
+            ['next_run' => $next_run, 'last_run' => current_time('mysql')],
+            ['id' => $sched_id]
+        );
     }
 }
 

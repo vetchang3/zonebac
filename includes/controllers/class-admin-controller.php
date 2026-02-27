@@ -30,6 +30,9 @@ class Zonebac_Admin_Controller
         });
 
         add_action('admin_post_zb_save_exercise_edit', [$this, 'handle_save_exercise_edit']);
+        add_action('admin_post_zb_save_smart_schedule', [$this, 'handle_save_smart_schedule']);
+
+        add_action('admin_post_zb_smart_priority_gen', [$this, 'handle_smart_priority_gen']);
     }
 
     public function enqueue_mathjax_front()
@@ -351,23 +354,22 @@ class Zonebac_Admin_Controller
     public function render_ex_generator_view()
     {
         global $wpdb;
+        require_once plugin_dir_path(__FILE__) . 'class-smart-engine.php';
+
         $classes = get_terms(['taxonomy' => 'classe', 'hide_empty' => false]);
+        $smart_engine = new Zonebac_Smart_Engine();
+        $stats_notions = [];
 
-        // LOGIQUE DE NOTIFICATION IDENTIQUE AUX QUESTIONS
-        $message = '';
-        $message_type = '';
+        // On récupère la matière depuis l'URL (GET)
+        $selected_matiere = isset($_GET['view_matiere']) ? intval($_GET['view_matiere']) : 0;
 
-        if (isset($_GET['success'])) {
-            $message = "La génération de l'exercice a été lancée avec succès via DeepSeek.";
-            $message_type = "updated"; // Vert
+        if ($selected_matiere > 0) {
+            // IMPORTANT : On passe l'ID récupéré à la méthode
+            $stats_notions = $smart_engine->get_priority_notions($selected_matiere, 50);
         }
 
-        if (isset($_GET['cleanup_done'])) {
-            $message = "L'historique des exercices terminés a été nettoyé.";
-            $message_type = "updated";
-        }
-
-        // Initialisation de la table
+        // Le reste du code (schedules, tables, etc.)
+        $schedules = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}zb_smart_schedules");
         require_once plugin_dir_path(__FILE__) . 'class-exercise-job-table.php';
         $ex_job_table = new Zonebac_Exercise_Job_Table();
         $ex_job_table->prepare_items();
@@ -452,6 +454,85 @@ class Zonebac_Admin_Controller
         );
 
         wp_redirect(admin_url('admin.php?page=zonebac-ex-bank&updated=1'));
+        exit;
+    }
+
+    /**
+     * Enregistre ou met à jour un planning de génération intelligente
+     */
+    public function handle_save_smart_schedule()
+    {
+        check_admin_referer('zb_smart_sched_nonce');
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        global $wpdb;
+        $matiere_id  = intval($_POST['matiere_id']);
+        $threshold_n = intval($_POST['threshold_n']);
+        $frequency   = sanitize_text_field($_POST['frequency']);
+
+        // Calcul du premier run : On commence dans 5 minutes pour test
+        $next_run = date('Y-m-d H:i:s', strtotime('+5 minutes'));
+
+        $table = $wpdb->prefix . 'zb_smart_schedules';
+
+        // On vérifie si un planning existe déjà pour cette matière pour éviter les doublons
+        $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE matiere_id = %d", $matiere_id));
+
+        if ($existing) {
+            $wpdb->update($table, [
+                'threshold_n' => $threshold_n,
+                'frequency'   => $frequency,
+                'is_active'   => 1
+            ], ['id' => $existing]);
+        } else {
+            $wpdb->insert($table, [
+                'matiere_id'  => $matiere_id,
+                'threshold_n' => $threshold_n,
+                'frequency'   => $frequency,
+                'next_run'    => $next_run,
+                'is_active'   => 1
+            ]);
+        }
+
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&smart_sched_updated=1#smart-mode'));
+        exit;
+    }
+
+    /**
+     * Lance une génération d'urgence pour une notion spécifique depuis le tableau des Gaps
+     */
+    public function handle_smart_priority_gen()
+    {
+        check_admin_referer('zb_priority_gen_nonce');
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        $notion_id = intval($_POST['notion_id']);
+
+        global $wpdb;
+        // On ajoute un job dans la file d'attente (Asynchrone)
+        $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
+            'notion_id'  => $notion_id,
+            'count'      => 10, // On génère par packs de 10 pour ne pas surcharger
+            'status'     => 'pending',
+            'created_at' => current_time('mysql')
+        ]);
+
+        // On redirige vers l'onglet Smart avec un message de succès
+        wp_redirect(add_query_arg(['page' => 'zonebac-ex-gen', 'message' => 'Job ajouté à la file d\'attente !'], admin_url('admin.php')) . '#smart-mode');
+        exit;
+    }
+
+    public function handle_run_dispatcher_now()
+    {
+        check_admin_referer('zb_run_dispatch_nonce');
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        require_once plugin_dir_path(__FILE__) . 'class-smart-engine.php';
+
+        // On appelle la méthode statique
+        Zonebac_Smart_Engine::run_auto_dispatcher();
+
+        wp_redirect(add_query_arg(['page' => 'zonebac-ex-gen', 'message' => 'Dispatcher exécuté avec succès !'], admin_url('admin.php')) . '#smart-mode');
         exit;
     }
 }
