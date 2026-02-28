@@ -22,20 +22,65 @@ class Zonebac_Admin_Controller
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
         add_action('admin_init', [$this, 'handle_early_actions']);
-        add_filter('the_content', [$this, 'render_question_preview_front'], 999);
-
         add_action('wp_enqueue_scripts', [$this, 'enqueue_mathjax_front']);
+        add_action('admin_post_zb_save_exercise_edit', [$this, 'handle_save_exercise_edit']);
+        add_action('admin_post_zb_save_smart_schedule', [$this, 'handle_save_smart_schedule']);
+        add_action('admin_post_zb_smart_priority_gen', [$this, 'handle_smart_priority_gen']);
+        add_action('admin_post_zb_run_dispatcher_now', [$this, 'handle_run_dispatcher_now']);
+        add_action('admin_post_zb_run_notion_mapping', [$this, 'handle_run_notion_mapping']);
+        add_action('save_post_notion', [get_class($this), 'auto_map_new_notion'], 10, 3);
 
-        // Autorise WordPress à conserver ce paramètre dans l'URL de l'admin
+
+        add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
         });
+    }
 
-        add_action('admin_post_zb_save_exercise_edit', [$this, 'handle_save_exercise_edit']);
-        add_action('admin_post_zb_save_smart_schedule', [$this, 'handle_save_smart_schedule']);
+    public static function auto_map_new_notion($post_id, $post, $update)
+    {
+        // On ne mappe que si c'est une publication réelle (pas un brouillon/auto-save)
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if ($post->post_status !== 'publish') return;
 
-        add_action('admin_post_zb_smart_priority_gen', [$this, 'handle_smart_priority_gen']);
-        add_action('admin_post_zb_run_dispatcher_now', [$this, 'handle_run_dispatcher_now']);
+        require_once plugin_dir_path(__FILE__) . 'class-smart-engine.php';
+
+        // On lance le mapping uniquement pour cette nouvelle notion [cite: 2025-11-16]
+        Zonebac_Smart_Engine::map_notions_relations_with_ai($post_id);
+    }
+
+    public function handle_run_notion_mapping()
+    {
+        error_log("Zonebac Debug: L'action Mapping a bien été reçue !"); // TEST 1
+
+        check_admin_referer('zb_run_mapping_nonce');
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        $file_path = plugin_dir_path(__FILE__) . 'class-smart-engine.php';
+        if (file_exists($file_path)) {
+            require_once $file_path;
+            error_log("Zonebac Debug: Fichier Smart Engine chargé."); // TEST 2
+            Zonebac_Smart_Engine::map_notions_relations_with_ai();
+        } else {
+            error_log("Zonebac Error: Fichier class-smart-engine.php introuvable à " . $file_path);
+        }
+
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#smart-mode'));
+        exit;
+    }
+
+    public function handle_save_dispatcher_status()
+    {
+        check_admin_referer('zb_dispatcher_status_nonce');
+        if (!current_user_can('manage_options')) return;
+
+        $settings = Zonebac_Settings_Model::get_settings();
+        $settings['enable_smart_dispatcher'] = isset($_POST['enable_smart_dispatcher']) ? 'yes' : 'no';
+
+        update_option('zb_lms_settings', $settings);
+
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=Status mis à jour#smart-mode'));
+        exit;
     }
 
     public function enqueue_mathjax_front()

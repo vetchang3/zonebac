@@ -14,4 +14,10 @@ class Zonebac_Settings_Model
     {
         update_option(self::$option_name, $data);
     }
+
+    public static function get_settings()
+    {
+        $settings = get_option('zb_lms_settings');
+        return is_array($settings) ? $settings : [];
+    }
 }

@@ -108,6 +108,65 @@
         border-color: #163A5E !important;
         padding: 0 20px !important;
     }
+
+    /*===========================*/
+    /* Style du Toggle Switch */
+    .zb-toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        margin: 20px 0;
+    }
+
+    .zb-switch {
+        position: relative;
+        display: inline-block;
+        width: 50px;
+        height: 26px;
+    }
+
+    .zb-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .zb-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #cbd5e1;
+        transition: .4s;
+        border-radius: 34px;
+    }
+
+    .zb-slider:before {
+        position: absolute;
+        content: "";
+        height: 18px;
+        width: 18px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+    }
+
+    input:checked+.zb-slider {
+        background-color: #10b981;
+        /* Vert Production */
+    }
+
+    input:focus+.zb-slider {
+        box-shadow: 0 0 1px #10b981;
+    }
+
+    input:checked+.zb-slider:before {
+        transform: translateX(24px);
+    }
 </style>
 
 <div class="wrap">
@@ -147,6 +206,23 @@
 
 
     <div id="smart-mode" class="zb-tab-content">
+        <div class="card zb-full-width" style="border-left: 4px solid #475569; background: #f1f5f9; padding: 20px; border-radius: 12px;">
+            <h3 style="margin-top:0;"><span class="dashicons dashicons-info"></span> Guide d'utilisation stratégique</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+                <div>
+                    <strong>1. Maillage Pédagogique</strong>
+                    <p class="description">À lancer en premier pour que l'IA connaisse les liens entre les notions. C'est ce qui permet de générer des exercices de <strong>synthèse</strong>.</p>
+                </div>
+                <div>
+                    <strong>2. Planning & Seuil</strong>
+                    <p class="description">Le dispatcher choisit la notion avec le plus gros <strong>Gap</strong> (objectif 50). Il ne travaille que si le Mode Production est sur <strong>ON</strong>.</p>
+                </div>
+                <div>
+                    <strong>3. Environnement</strong>
+                    <p class="description">En local, utilise le bouton <strong>"Test du Dispatcher"</strong> pour simuler une exécution sans attendre le Cron WordPress.</p>
+                </div>
+            </div>
+        </div>
         <div class="card" style="border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 20px; margin-bottom: 20px;">
             <form method="get" style="display: flex; align-items: center; gap: 20px;">
                 <input type="hidden" name="page" value="zonebac-ex-gen">
@@ -172,6 +248,59 @@
                 </form>
             </div>
         </div>
+
+        <div class="card" style="margin-bottom: 25px; border-left: 4px solid #6366f1; background: #f5f3ff; padding: 15px; border-radius: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h4 style="margin:0; color: #4338ca;"><span class="dashicons dashicons-networking"></span> Initialisation du Maillage IA</h4>
+                    <p class="description" style="margin:5px 0 0 0;">Analyse les notions pour identifier les pré-requis et créer des exercices transversaux.</p>
+                </div>
+                <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+                    <input type="hidden" name="action" value="zb_run_notion_mapping">
+                    <?php wp_nonce_field('zb_run_mapping_nonce'); ?>
+                    <button type="submit" class="button button-secondary" style="border-color: #6366f1; color: #4338ca;">Lancer le scan (5 notions)</button>
+                </form>
+            </div>
+        </div>
+
+
+
+        <?php
+        $settings = Zonebac_Settings_Model::get_settings();
+        $is_enabled = ($settings['enable_smart_dispatcher'] ?? 'no') === 'yes';
+        ?>
+
+        <div class="card" style="border-radius: 12px; border: 1px solid #e2e8f0; padding: 20px; background: #fff;">
+            <h3 style="margin-top:0;"><span class="dashicons dashicons-admin-settings"></span> Contrôle du Moteur Intelligent</h3>
+
+            <form method="post" action="admin-post.php">
+                <input type="hidden" name="action" value="zb_save_dispatcher_status">
+                <?php wp_nonce_field('zb_dispatcher_status_nonce'); ?>
+
+                <div class="zb-toggle-wrapper">
+                    <label class="zb-switch">
+                        <input type="checkbox" name="enable_smart_dispatcher" value="yes" <?php checked($is_enabled); ?>>
+                        <span class="zb-slider"></span>
+                    </label>
+                    <div>
+                        <strong style="font-size: 1.1em; display: block;">
+                            <?php echo $is_enabled ? "Mode Production Actif" : "Mode Développement (Pause)"; ?>
+                        </strong>
+                        <span class="description">
+                            <?php echo $is_enabled
+                                ? "Le dispatcher analyse les Gaps et sollicite l'IA selon le planning."
+                                : "L'IA ne sera jamais sollicitée automatiquement en arrière-plan."; ?>
+                        </span>
+                    </div>
+                </div>
+
+                <button type="submit" class="button button-primary" style="background: #6366f1; border-color: #4f46e5;">
+                    Enregistrer la configuration
+                </button>
+            </form>
+        </div>
+
+
 
         <div class="zb-final-container">
             <div class="zb-col-30">
@@ -223,6 +352,32 @@
                 endif; ?>
             </div>
         </div>
+    </div>
+
+    <div class="card" style="margin-top:20px; border-top: 4px solid #6366f1;">
+        <h3><span class="dashicons dashicons-networking"></span> Dernières Connexions Pédagogiques</h3>
+        <table class="wp-list-table widefat striped">
+            <thead>
+                <tr>
+                    <th>Notion Source</th>
+                    <th>Notions Liées (Synthèse)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php
+                global $wpdb;
+                $relations = $wpdb->get_results("SELECT notion_id, GROUP_CONCAT(related_notion_id) as related FROM {$wpdb->prefix}zb_notion_relations GROUP BY notion_id ORDER BY id DESC LIMIT 5");
+                foreach ($relations as $rel) : ?>
+                    <tr>
+                        <td><strong><?php echo get_the_title($rel->notion_id); ?></strong></td>
+                        <td><?php
+                            $ids = explode(',', $rel->related);
+                            foreach ($ids as $id) echo '<span class="tag" style="background:#e0e7ff; padding:2px 8px; border-radius:12px; margin-right:5px;">' . get_the_title($id) . '</span>';
+                            ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
 
     <div class="zb-jobs-monitor">

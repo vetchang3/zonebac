@@ -74,7 +74,17 @@ class Zonebac_DB_Manager
             PRIMARY KEY  (id)
         ) $charset_collate;";
 
-        // Exécution sécurisée via dbDelta
+        $table_relations = $wpdb->prefix . 'zb_notion_relations';
+        $sql_relations = "CREATE TABLE $table_relations (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            notion_id bigint(20) NOT NULL,
+            related_notion_id bigint(20) NOT NULL,
+            strength int(3) DEFAULT 1,
+            PRIMARY KEY  (id),
+            KEY notion_id (notion_id)
+        ) $charset_collate;";
+
+        dbDelta($sql_relations);
         dbDelta($sql_questions);
         dbDelta($sql_exercises);
         dbDelta($sql_jobs);

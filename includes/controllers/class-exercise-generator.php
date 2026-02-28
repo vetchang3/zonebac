@@ -57,37 +57,54 @@ class Zonebac_Exercise_Generator
         $table_jobs = $wpdb->prefix . 'zb_exercise_jobs';
         $wpdb->update($table_jobs, ['status' => 'processing'], ['id' => $job_id]);
 
+        // 1. RÉCUPÉRATION DES NOTIONS LIÉES (MAILLAGE) [cite: 2025-11-16]
+        $related_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT related_notion_id FROM {$wpdb->prefix}zb_notion_relations WHERE notion_id = %d",
+            $notion_id
+        ));
+
+        $extra_notions = [];
+        if (!empty($related_ids)) {
+            foreach ($related_ids as $rid) {
+                $title = get_the_title($rid);
+                if ($title) {
+                    $extra_notions[] = $title;
+                }
+            }
+        }
+
         $deepseek = new Zonebac_DeepSeek_API();
+        error_log("ZONEBAC: Génération d'un exercice " . (empty($extra_notions) ? "MONO-NOTION" : "DE SYNTHÈSE") . " pour le job " . $job_id);
 
-        error_log("ZONEBAC: Appel API DeepSeek pour l'exercice du job " . $job_id);
+        // 2. PRÉPARATION DES PARAMÈTRES
+        $job_data = $wpdb->get_row($wpdb->prepare("SELECT count FROM $table_jobs WHERE id = %d", $job_id));
 
-        // Préparation des paramètres pour le prompt
         $params = [
-            'count'    => $wpdb->get_var($wpdb->prepare("SELECT count FROM $table_jobs WHERE id = %d", $job_id)),
-            'notion'   => get_the_title($notion_id),
-            'classe'   => wp_get_post_terms($notion_id, 'classe')[0]->name ?? 'Terminale',
-            'matiere'  => wp_get_post_terms($notion_id, 'matiere')[0]->name ?? '',
-            'chapitre' => wp_get_post_terms($notion_id, 'chapitre')[0]->name ?? '',
-            'f' => 30,
-            'm' => 40,
-            'd' => 30 // Ratios de difficulté demandés
+            'count'         => $job_data->count,
+            'notion'        => get_the_title($notion_id),
+            'extra_notions' => $extra_notions, // On injecte notre tableau ici [cite: 2025-11-16]
+            'classe'        => wp_get_post_terms($notion_id, 'classe')[0]->name ?? 'Terminale',
+            'matiere'       => wp_get_post_terms($notion_id, 'matiere')[0]->name ?? '',
+            'chapitre'      => wp_get_post_terms($notion_id, 'chapitre')[0]->name ?? '',
+            'f'             => 30,
+            'm'             => 40,
+            'd'             => 30
         ];
 
         $result_json = $deepseek->generate_exercise_batch($params);
+
         if (!$result_json) {
-            error_log("ZONEBAC ERROR: L'API n'a rien renvoyé pour le job " . $job_id);
             $wpdb->update($table_jobs, ['status' => 'failed'], ['id' => $job_id]);
             return;
         }
 
-        // Nettoyage et décodage
+        // Nettoyage et insertion (ton code existant reste inchangé ici)
         if (is_string($result_json)) {
             $result_json = preg_replace('/^```json|```$/m', '', $result_json);
             $exercise = json_decode(trim($result_json), true);
         }
 
         if ($exercise && isset($exercise['questions'])) {
-            // Insertion de l'exercice complet
             $wpdb->insert(
                 $wpdb->prefix . 'zb_exercises',
                 [
@@ -98,11 +115,11 @@ class Zonebac_Exercise_Generator
                     'created_at'    => current_time('mysql')
                 ]
             );
-
             $wpdb->update($table_jobs, ['status' => 'completed'], ['id' => $job_id]);
         } else {
             $wpdb->update($table_jobs, ['status' => 'failed'], ['id' => $job_id]);
         }
+
         do_action('zb_job_completed');
     }
 
