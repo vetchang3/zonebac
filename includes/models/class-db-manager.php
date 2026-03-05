@@ -56,6 +56,7 @@ class Zonebac_DB_Manager
             notion_id bigint(20) NOT NULL,
             count int(11) NOT NULL,
             status varchar(20) DEFAULT 'pending',
+            params LONGTEXT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id)
         ) $charset_collate;";
@@ -84,6 +85,20 @@ class Zonebac_DB_Manager
             KEY notion_id (notion_id)
         ) $charset_collate;";
 
+        $table_ingestion = $wpdb->prefix . 'zb_file_ingestion';
+        $sql_ingestion = "CREATE TABLE $table_ingestion (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            file_name varchar(255) NOT NULL,
+            file_path varchar(255) NOT NULL,
+            origin_info varchar(255) NOT NULL,
+            matiere_id bigint(20) NOT NULL,
+            status varchar(20) DEFAULT 'pending', -- pending, processing, completed, failed
+            total_exercises_found int(11) DEFAULT 0,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id)
+        ) $charset_collate;";
+
+        dbDelta($sql_ingestion);
         dbDelta($sql_relations);
         dbDelta($sql_questions);
         dbDelta($sql_exercises);

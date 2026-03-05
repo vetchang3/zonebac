@@ -169,4 +169,96 @@ class Zonebac_Smart_Engine
             }
         }
     }
+
+    /**
+     * Orchestre le découpage d'un PDF en exercices distincts
+     */
+    public static function process_file_splitting($ingestion_id)
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'zb_file_ingestion';
+        $file = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $ingestion_id));
+
+        if (!$file || !file_exists($file->file_path)) {
+            $wpdb->update($table, ['status' => 'failed'], ['id' => $ingestion_id]);
+            return;
+        }
+
+        $wpdb->update($table, ['status' => 'processing'], ['id' => $ingestion_id]);
+
+        // 1. Préparation du fichier pour l'IA (Vision)
+        $file_data = base64_encode(file_get_contents($file->file_path));
+        $mime_type = mime_content_type($file->file_path);
+
+        // 2. Prompt de découpage visuel intelligent [cite: 2025-11-16]
+        $prompt = "Tu es un expert en numérisation d'archives pédagogiques de %s. 
+        Analyse visuellement ce document (Origine : %s).
+        
+        MISSIONS :
+        1. Identifie chaque exercice distinct présent sur les pages.
+        2. Extrais le texte intégral de chaque exercice avec une précision chirurgicale.
+        3. Ignore absolument les ratures, ronds, ou notes écrites à la main par des élèves.
+        4. Ignore les publicités ou en-têtes de l'époque.
+        
+        RÉPONDS EXCLUSIVEMENT en JSON : {\"exercices\": [\"Texte exercice 1\", \"Texte exercice 2\"]}";
+
+        $params = [
+            'prompt' => sprintf($prompt, $file->origin_info, $file->origin_info),
+            'file_data' => $file_data,
+            'mime_type' => $mime_type
+        ];
+
+        // On appelle une nouvelle méthode Vision que nous allons créer
+        $response = Zonebac_DeepSeek_API::call_deepseek_vision($params);
+
+        if ($response) {
+            $data = json_decode(preg_replace('/^```json|```$/m', '', $response), true);
+            if (!empty($data['exercices'])) {
+                foreach ($data['exercices'] as $raw_ex) {
+                    self::create_extraction_job($file->id, $raw_ex, $file->matiere_id, $file->origin_info, $file->file_name);
+                }
+                $wpdb->update($table, [
+                    'status' => 'completed',
+                    'total_exercises_found' => count($data['exercices'])
+                ], ['id' => $ingestion_id]);
+            }
+        } else {
+            $wpdb->update($table, ['status' => 'failed'], ['id' => $ingestion_id]);
+        }
+    }
+
+    private static function create_extraction_job($ingestion_id, $raw_text, $matiere_id, $origin, $file_ref)
+    {
+        global $wpdb;
+        $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
+            'notion_id' => 0, // 0 indique que c'est une extraction externe
+            'status'    => 'pending',
+            'params'    => json_encode([
+                'mode'           => 'extraction',
+                'raw_content'    => $raw_text,
+                'matiere_id'     => $matiere_id,
+                'origin'         => $origin,
+                'file_reference' => $file_ref
+            ]),
+            'created_at' => current_time('mysql')
+        ]);
+    }
+
+    public static function run_ingestion_dispatcher()
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'zb_file_ingestion';
+
+        // Sécurité : On vérifie le Toggle ON/OFF
+        $settings = Zonebac_Settings_Model::get_settings();
+        if (($settings['enable_smart_dispatcher'] ?? 'no') !== 'yes') return;
+
+        // Récupérer le plus vieux fichier en attente
+        $file = $wpdb->get_row("SELECT * FROM $table WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1");
+
+        if ($file) {
+            error_log("ZONEBAC: Début du découpage pour " . $file->file_name);
+            self::process_file_splitting($file->id);
+        }
+    }
 }

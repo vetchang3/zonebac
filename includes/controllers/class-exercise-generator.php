@@ -55,42 +55,61 @@ class Zonebac_Exercise_Generator
     {
         global $wpdb;
         $table_jobs = $wpdb->prefix . 'zb_exercise_jobs';
+
+        // 1. DÉBUT DU TRAITEMENT
         $wpdb->update($table_jobs, ['status' => 'processing'], ['id' => $job_id]);
+        $job_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_jobs WHERE id = %d", $job_id));
 
-        // 1. RÉCUPÉRATION DES NOTIONS LIÉES (MAILLAGE) [cite: 2025-11-16]
-        $related_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT related_notion_id FROM {$wpdb->prefix}zb_notion_relations WHERE notion_id = %d",
-            $notion_id
-        ));
+        if (!$job_data) return;
 
-        $extra_notions = [];
-        if (!empty($related_ids)) {
-            foreach ($related_ids as $rid) {
-                $title = get_the_title($rid);
-                if ($title) {
-                    $extra_notions[] = $title;
+        $params = [];
+        $deepseek = new Zonebac_DeepSeek_API();
+
+        // 2. LOGIQUE CONDITIONNELLE : EXTRACTION VS GÉNÉRATION
+        if ($notion_id == 0) {
+            // --- MODE EXTRACTION D'ARCHIVE ---
+            $params = json_decode($job_data->params, true);
+            $params['mode'] = 'extraction';
+
+            // On récupère le nom de la matière pour le prompt
+            $term = get_term($params['matiere_id'], 'matiere');
+            $params['matiere'] = $term ? $term->name : 'Scientifique';
+
+            error_log("ZONEBAC: Transformation d'un exercice extrait (Fichier: " . $params['file_reference'] . ")");
+        } else {
+            // --- MODE GÉNÉRATION CLASSIQUE (MAILLAGE) --- [cite: 2025-11-16]
+            $related_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT related_notion_id FROM {$wpdb->prefix}zb_notion_relations WHERE notion_id = %d",
+                $notion_id
+            ));
+
+            $extra_notions = [];
+            if (!empty($related_ids)) {
+                foreach ($related_ids as $rid) {
+                    $title = get_the_title($rid);
+                    if ($title) $extra_notions[] = $title;
                 }
             }
+
+            $params = [
+                'mode'          => 'generation',
+                'count'         => $job_data->count,
+                'notion'        => get_the_title($notion_id),
+                'extra_notions' => $extra_notions,
+                'classe'        => wp_get_post_terms($notion_id, 'classe')[0]->name ?? 'Terminale',
+                'matiere'       => wp_get_post_terms($notion_id, 'matiere')[0]->name ?? '',
+                'chapitre'      => wp_get_post_terms($notion_id, 'chapitre')[0]->name ?? '',
+                'origin'        => 'IA Zonebac', // Valeurs par défaut pour la cohérence JSON
+                'file_reference' => 'Generated',
+                'f' => 30,
+                'm' => 40,
+                'd' => 30
+            ];
+
+            error_log("ZONEBAC: Génération IA pour la notion " . $params['notion']);
         }
 
-        $deepseek = new Zonebac_DeepSeek_API();
-        error_log("ZONEBAC: Génération d'un exercice " . (empty($extra_notions) ? "MONO-NOTION" : "DE SYNTHÈSE") . " pour le job " . $job_id);
-
-        // 2. PRÉPARATION DES PARAMÈTRES
-        $job_data = $wpdb->get_row($wpdb->prepare("SELECT count FROM $table_jobs WHERE id = %d", $job_id));
-
-        $params = [
-            'count'         => $job_data->count,
-            'notion'        => get_the_title($notion_id),
-            'extra_notions' => $extra_notions, // On injecte notre tableau ici [cite: 2025-11-16]
-            'classe'        => wp_get_post_terms($notion_id, 'classe')[0]->name ?? 'Terminale',
-            'matiere'       => wp_get_post_terms($notion_id, 'matiere')[0]->name ?? '',
-            'chapitre'      => wp_get_post_terms($notion_id, 'chapitre')[0]->name ?? '',
-            'f'             => 30,
-            'm'             => 40,
-            'd'             => 30
-        ];
-
+        // 3. APPEL API
         $result_json = $deepseek->generate_exercise_batch($params);
 
         if (!$result_json) {
@@ -98,25 +117,25 @@ class Zonebac_Exercise_Generator
             return;
         }
 
-        // Nettoyage et insertion (ton code existant reste inchangé ici)
-        if (is_string($result_json)) {
-            $result_json = preg_replace('/^```json|```$/m', '', $result_json);
-            $exercise = json_decode(trim($result_json), true);
-        }
+        // 4. NETTOYAGE ET INSERTION
+        $clean_json = preg_replace('/^```json|```$/m', '', $result_json);
+        $exercise = json_decode(trim($clean_json), true);
 
         if ($exercise && isset($exercise['questions'])) {
             $wpdb->insert(
                 $wpdb->prefix . 'zb_exercises',
                 [
-                    'notion_id'     => $notion_id,
+                    'notion_id'     => $notion_id, // Sera 0 pour les extractions
                     'title'         => sanitize_text_field($exercise['exercise_title']),
                     'subject_text'  => wp_kses_post($exercise['subject_text']),
-                    'exercise_data' => json_encode($exercise['questions'], JSON_UNESCAPED_UNICODE),
+                    // On stocke tout l'objet JSON pour garder les metadata [cite: 2026-02-23]
+                    'exercise_data' => json_encode($exercise, JSON_UNESCAPED_UNICODE),
                     'created_at'    => current_time('mysql')
                 ]
             );
             $wpdb->update($table_jobs, ['status' => 'completed'], ['id' => $job_id]);
         } else {
+            error_log("ZONEBAC ERROR: JSON invalide ou questions manquantes pour le job " . $job_id);
             $wpdb->update($table_jobs, ['status' => 'failed'], ['id' => $job_id]);
         }
 

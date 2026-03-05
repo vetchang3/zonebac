@@ -122,7 +122,9 @@ class Zonebac_DeepSeek_API
         $api_key = Zonebac_Settings_Model::get_api_key();
         if (empty($api_key)) return false;
 
-        $prompt = $this->build_exercise_prompt($params);
+        $prompt = (isset($params['mode']) && $params['mode'] === 'extraction')
+            ? $this->build_transformation_prompt($params)
+            : $this->build_exercise_prompt($params);
 
         $response = wp_remote_post($this->api_url, [
             'headers' => [
@@ -159,6 +161,12 @@ class Zonebac_DeepSeek_API
             $context_instruction = "Focus : Concentre l'exercice exclusivement sur l'exploration approfondie de la notion principale.";
         }
 
+        $context_instruction = "";
+        if (!empty($p['extra_notions'])) {
+            $notions_list = implode(', ', $p['extra_notions']);
+            $context_instruction = "IMPORTANT : Il s'agit d'un exercice de SYNTHÈSE. Tu DOIS obligatoirement créer des ponts logiques avec : $notions_list.";
+        }
+
         $template = "Tu es un concepteur d'examens expert pour le programme du Baccalauréat. 
         Génère un EXERCICE complet pour :
         Niveau: %s | Matière: %s | Chapitre: %s | Notion: %s
@@ -192,23 +200,32 @@ class Zonebac_DeepSeek_API
         - IMAGES : Si la question nécessite un schéma ou un graphique, remplis 'image_suggestion' avec une description détaillée. Sinon, laisse vide.
 
 
-        FORMAT JSON ATTENDU :
+        \"FORMAT JSON ATTENDU :
         {
             \"exercise_title\": \"Titre accrocheur du devoir\",
             \"subject_text\": \"Énoncé long de mise en situation...\",
+            \"metadata\": {
+                \"origin\": \"%s\", 
+                \"file_reference\": \"%s\",
+                \"matiere\": \"Nom de la matière\",
+                \"chapitres\": [\"Chapitre A\", \"Chapitre B\"],
+                \"notions_clés\": [\"Notion 1\", \"Notion 2\"],
+                \"competences_testees\": [\"Calcul\", \"Raisonnement\", \"Modélisation\"]
+            },
             \"questions\": [
-            {
+              {
                 \"type\": \"single\" | \"multi\",
                 \"question\": \"Énoncé lié au sujet\",
-                \"points\": 1 | 3 | 5, -- (1 pour Facile, 3 pour Moyen, 5 pour Difficile)
+                \"points\": %d,
                 \"options\": [\"A\", \"B\", \"C\", \"D\"], -- (5 options si multi, ajout option E)
                 \"answer\": \"Texte exact\" | [\"Rép 1\", \"Rép 2\"] -- (1 réponse exacte si single, 2 si multi),
-                \"explanation\": \"Explication pédagogique complète, preécise et détaillée avec LaTeX\",
+                \"explanation\": \"Explication pédagogique complète, précise et détaillée avec LaTeX\",
                 \"difficulty\": \"Facile\" | \"Moyen\" | \"Difficile\",
                 \"image_suggestion\": \"Description si besoin\"
-            }
+              }
             ]
-        }";
+        }\";
+        ";
 
 
         return sprintf(
@@ -221,7 +238,10 @@ class Zonebac_DeepSeek_API
             $p['count'],
             $p['f'],
             $p['m'],
-            $p['d']
+            $p['d'],
+            $p['origin'],
+            $p['file_reference'],
+            $p['f'] // Exemple pour les points
         );
     }
 
@@ -261,5 +281,74 @@ class Zonebac_DeepSeek_API
 
         $body = json_decode(wp_remote_retrieve_body($response), true);
         return $body['choices'][0]['message']['content'] ?? false;
+    }
+
+    private function build_transformation_prompt($p)
+    {
+        $template = "Tu es un expert en pédagogie spécialisé en %s. 
+        MISSION : Transforme l'exercice brut suivant en un exercice interactif structuré (QCM).
+        
+        ORIGINE : %s
+        RÉFÉRENCE : %s
+        
+        CONTENU BRUT DE L'EXERCICE :
+        %s
+
+        CONSIGNES DE RÉDACTION :
+        1. Fidélité : Garde l'énoncé scientifique exact. Si des notations LaTeX sont présentes, assure-toi qu'elles sont parfaites.
+        2. Création de QCM : Pour chaque question de l'énoncé original, crée 5 options (A, B, C, D, E). 
+        - Une seule réponse doit être correcte (Type single).
+        - Les 4 autres (distracteurs) doivent être des erreurs classiques d'élèves.
+        3. Explication : Rédige une correction détaillée, étape par étape, pour chaque question.
+        4. Métadonnées : Identifie les chapitres et les notions de %s concernées.
+
+        FORMAT JSON STRICT :
+        {
+            \"exercise_title\": \"Titre extrait ou déduit\",
+            \"subject_text\": \"L'énoncé complet nettoyé\",
+            \"metadata\": {
+                \"origin\": \"%s\",
+                \"file_reference\": \"%s\",
+                \"matiere\": \"%s\",
+                \"chapitres\": [],
+                \"notions_clés\": [],
+                \"competences_testees\": []
+            },
+            \"questions\": [
+            {
+                \"type\": \"single\",
+                \"question\": \"...\",
+                \"points\": 3,
+                \"options\": [\"A\", \"B\", \"C\", \"D\", \"E\"],
+                \"answer\": \"La bonne réponse exacte\",
+                \"explanation\": \"Explication détaillée en LaTeX\",
+                \"difficulty\": \"Moyen\"
+            }
+            ]
+        }";
+
+        return sprintf(
+            $template,
+            $p['matiere'],
+            $p['origin'],
+            $p['file_reference'],
+            $p['raw_content'],
+            $p['matiere'],
+            $p['origin'],
+            $p['file_reference'],
+            $p['matiere']
+        );
+    }
+    public static function call_deepseek_vision($params)
+    {
+        $settings = Zonebac_Settings_Model::get_settings();
+        $api_key  = $settings['deepseek_key'] ?? '';
+
+        // Note d'expert : DeepSeek-Chat ne supporte pas nativement les images. 
+        // Pour un test immédiat "Wahou", utilise Gemini 1.5 Flash ou Pro.
+        // Voici la structure pour envoyer le binaire à une API multi-modale :
+        return self::call_deepseek_raw(
+            $params['prompt'] . "\n[CONTENU DU FICHIER EN BASE64 : " . substr($params['file_data'], 0, 100) . "...]"
+        );
     }
 }

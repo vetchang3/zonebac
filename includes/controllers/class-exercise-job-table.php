@@ -26,22 +26,42 @@ class Zonebac_Exercise_Job_Table extends Zonebac_Base_Job_Table
         ];
     }
 
+    public function column_notion_id($item)
+    {
+        if ($item['notion_id'] == 0) {
+            // C'est un exercice extrait d'un PDF
+            return '<span class="dashicons dashicons-media-document" style="color:#8b5cf6;" title="Extrait d\'un PDF"></span> <strong>Archive</strong>';
+        } else {
+            // C'est une génération automatique par Gap
+            return '<span class="dashicons dashicons-smart-machine" style="color:#10b981;" title="Génération IA"></span> ' . get_the_title($item['notion_id']);
+        }
+    }
     public function column_notion($item)
     {
-        $title = get_the_title($item['notion_id']);
-        $page = $_REQUEST['page'];
+        $icon = '';
+        $label = '';
 
-        $actions = [
-            'delete' => sprintf('<a href="?page=%s&action=delete_job&job=%d" onclick="return confirm(\'Supprimer ?\')">Supprimer</a>', $page, $item['id']),
-        ];
+        if (intval($item['notion_id']) === 0) {
+            // On récupère le nom du fichier dans les params
+            $params = json_decode($item['params'], true);
+            $file_name = !empty($params['file_reference']) ? $params['file_reference'] : 'Archive PDF';
 
-        if (strtoupper($item['status']) === 'PROCESSING') {
-            $actions['run'] = '<span style="color:#991b1b;">Génération en cours...</span>';
+            $icon = '<span class="dashicons dashicons-media-document" style="color:#8b5cf6; margin-right:8px;"></span>';
+            $label = '<span style="color:#8b5cf6; font-weight:bold;">' . esc_html($file_name) . '</span>';
         } else {
-            $actions['run'] = sprintf('<a href="?page=%s&action=run_job&job=%d">Relancer</a>', $page, $item['id']);
+            $icon = '<span class="dashicons dashicons-smart-machine" style="color:#10b981; margin-right:8px;"></span>';
+            $label = get_the_title($item['notion_id']);
         }
 
-        return sprintf('<strong>%s</strong> %s', esc_html($title), $this->row_actions($actions));
+        // Conservation des actions
+        $actions = [
+            'delete' => sprintf('<a href="?page=%s&action=delete_job&job=%d" onclick="return confirm(\'Supprimer ?\')">Supprimer</a>', $_REQUEST['page'], $item['id']),
+        ];
+        $actions['run'] = (strtoupper($item['status']) === 'PROCESSING')
+            ? '<span style="color:#991b1b;">Génération...</span>'
+            : sprintf('<a href="?page=%s&action=run_job&job=%d">Relancer</a>', $_REQUEST['page'], $item['id']);
+
+        return sprintf('<div style="display:flex; align-items:center;">%s %s</div> %s', $icon, $label, $this->row_actions($actions));
     }
 
     public function prepare_items()
