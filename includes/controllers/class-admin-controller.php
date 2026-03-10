@@ -29,12 +29,56 @@ class Zonebac_Admin_Controller
         add_action('admin_post_zb_run_dispatcher_now', [$this, 'handle_run_dispatcher_now']);
         add_action('admin_post_zb_run_notion_mapping', [$this, 'handle_run_notion_mapping']);
         add_action('save_post_notion', [get_class($this), 'auto_map_new_notion'], 10, 3);
+        add_action('admin_post_zb_handle_file_ingestion', [$this, 'handle_file_ingestion']);
 
 
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
         });
+    }
+
+    public function handle_file_ingestion()
+    {
+        global $wpdb;
+        check_admin_referer('zb_ingestion_nonce');
+
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        $matiere_id = intval($_POST['matiere_id']);
+        $files = $_FILES['zb_archives'];
+
+        require_once(ABSPATH . 'wp-admin/includes/file.php');
+
+        foreach ($files['name'] as $key => $value) {
+            if ($files['name'][$key]) {
+                $file = [
+                    'name'     => $files['name'][$key],
+                    'type'     => $files['type'][$key],
+                    'tmp_name' => $files['tmp_name'][$key],
+                    'error'    => $files['error'][$key],
+                    'size'     => $files['size'][$key]
+                ];
+
+                // Upload sécurisé dans le dossier /uploads/ [cite: 2025-11-16]
+                $upload = wp_handle_upload($file, ['test_form' => false]);
+
+                if ($upload && !isset($upload['error'])) {
+                    // Enregistrement dans notre nouvelle table
+                    $wpdb->insert($wpdb->prefix . 'zb_file_ingestion', [
+                        'file_name'  => $file['name'],
+                        'file_path'  => $upload['file'],
+                        'origin_info' => sanitize_text_field($file['name']), // Utilise le nom du fichier par défaut
+                        'matiere_id' => $matiere_id,
+                        'status'     => 'pending',
+                        'created_at' => current_time('mysql')
+                    ]);
+                }
+            }
+        }
+
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#ingestion-mode'));
+        exit;
     }
 
     public static function auto_map_new_notion($post_id, $post, $update)

@@ -198,12 +198,13 @@
     <h2 class="nav-tab-wrapper" style="margin-bottom: 20px;">
         <a href="#manual-mode" class="nav-tab">Génération Manuelle</a>
         <a href="#smart-mode" class="nav-tab">Génération Intelligente & Planning</a>
+        <a href="#ingestion-mode" class="nav-tab">Ingestion d'épreuves</a>
+
     </h2>
 
     <div id="manual-mode" class="zb-tab-content">
         <?php $this->render_shared_hierarchy_form('zb_do_exercise_generation', 'zb_ex_gen_action'); ?>
     </div>
-
 
     <div id="smart-mode" class="zb-tab-content">
         <div class="card zb-full-width" style="border-left: 4px solid #475569; background: #f1f5f9; padding: 20px; border-radius: 12px;">
@@ -223,6 +224,7 @@
                 </div>
             </div>
         </div>
+
         <div class="card" style="border-left: 4px solid #0ea5e9; background: #f8fafc; padding: 20px; margin-bottom: 20px;">
             <form method="get" style="display: flex; align-items: center; gap: 20px;">
                 <input type="hidden" name="page" value="zonebac-ex-gen">
@@ -351,6 +353,79 @@
                 <?php else: echo "<p class='description'>Veuillez sélectionner une matière ci-dessus.</p>";
                 endif; ?>
             </div>
+        </div>
+    </div>
+
+    <div id="ingestion-mode" class="zb-tab-content">
+        <div class="card" style="border-left: 4px solid #8b5cf6; padding: 25px; border-radius: 12px; background: #fff;">
+            <h3><span class="dashicons dashicons-upload"></span> Ingestion d'épreuves (Archives)</h3>
+            <p class="description">Déposez vos fichiers PDF. L'IA extraira les exercices pour les transformer en QCM.</p>
+
+            <form method="post" enctype="multipart/form-data" action="<?php echo admin_url('admin-post.php'); ?>" style="margin-top: 20px;">
+                <input type="hidden" name="action" value="zb_handle_file_ingestion">
+                <?php wp_nonce_field('zb_ingestion_nonce'); ?>
+
+                <p><strong>1. Matière cible :</strong><br>
+                    <select name="matiere_id" required style="min-width:300px;">
+                        <?php
+                        $matieres = get_terms(['taxonomy' => 'matiere', 'hide_empty' => false]);
+                        foreach ($matieres as $m) : ?>
+                            <option value="<?php echo $m->term_id; ?>"><?php echo esc_html($m->name); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </p>
+
+                <p><strong>2. Sélectionner les PDF :</strong><br>
+                    <input type="file" name="zb_archives[]" multiple accept=".pdf" class="button">
+                </p>
+
+                <?php submit_button('Lancer l\'analyse des fichiers', 'button-primary', 'submit', true, [
+                    'style' => 'background:#8b5cf6; border-color:#7c3aed;'
+                ]); ?>
+            </form>
+        </div>
+
+        <div class="zb-jobs-monitor" style="margin-top:30px; border-top: 2px solid #e2e8f0; padding-top: 20px;">
+            <h3><span class="dashicons dashicons-media-document"></span> Suivi de l'ingestion des archives</h3>
+            <table class="wp-list-table widefat striped" style="margin-top:15px;">
+                <thead>
+                    <tr>
+                        <th>Fichier</th>
+                        <th>Origine</th>
+                        <th>Statut</th>
+                        <th style="text-align:center;">Exercices Détectés</th>
+                        <th>Date d'Upload</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    global $wpdb;
+                    $files = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}zb_file_ingestion ORDER BY created_at DESC LIMIT 10");
+
+                    if ($files) :
+                        foreach ($files as $f) :
+                            $status_label = [
+                                'pending'    => '<span style="color:#f59e0b;">⏳ En attente</span>',
+                                'processing' => '<span style="color:#6366f1;">⚙️ Analyse...</span>',
+                                'completed'  => '<span style="color:#10b981;">✅ Terminé</span>',
+                                'failed'     => '<span style="color:#ef4444;">❌ Échec</span>'
+                            ];
+                    ?>
+                            <tr>
+                                <td><strong><?php echo esc_html($f->file_name); ?></strong></td>
+                                <td><?php echo esc_html($f->origin_info); ?></td>
+                                <td><?php echo $status_label[$f->status] ?? $f->status; ?></td>
+                                <td style="text-align:center;"><strong><?php echo $f->total_exercises_found; ?></strong></td>
+                                <td><?php echo date_i18n('d/m/Y H:i', strtotime($f->created_at)); ?></td>
+                            </tr>
+                        <?php endforeach;
+                    else : ?>
+                        <tr>
+                            <td colspan="5" class="description">Aucun fichier en cours de traitement.</td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
     </div>
 
