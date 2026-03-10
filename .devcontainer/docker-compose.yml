@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  db:
+    image: mariadb:10.6
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+
+  wordpress:
+    image: wordpress:latest
+    ports:
+      - "8080:80"
+    restart: always
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: 1
+    volumes:
+      # On monte le dossier courant (votre plugin) dans le dossier plugins de WP
+      - ..:/var/www/html/wp-content/plugins/zonebac-lms
+      # Volume pour persister les données si besoin
+      - wp_data:/var/www/html
+
+volumes:
+  wp_data:
