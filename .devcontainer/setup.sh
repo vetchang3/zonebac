@@ -27,3 +27,12 @@ docker exec wordpress touch /var/www/html/wp-content/debug.log
 docker exec wordpress chmod 666 /var/www/html/wp-content/debug.log
 
 echo "✅ Environnement prêt !"
+
+
+# S'assurer que le fichier de log existe avec les bons droits
+docker exec wordpress touch /var/www/html/wp-content/debug.log
+docker exec wordpress chmod 666 /var/www/html/wp-content/debug.log
+
+# Créer un lien symbolique pour voir le log directement dans l'explorateur du plugin
+# Cela fera apparaître un fichier "debug.log" dans votre barre latérale VS Code
+ln -s /var/www/html/wp-content/debug.log /var/www/html/wp-content/plugins/zonebac/debug.log
