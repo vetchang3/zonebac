@@ -3,12 +3,16 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "wordpress",
   "workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
+  "postStartCommand": "bash .devcontainer/setup.sh",
   "customizations": {
     "vscode": {
+      "settings": {
+        "php.suggest.basic": false,
+        "telemetry.enableTelemetry": false
+      },
       "extensions": [
         "xdebug.php-debug",
-        "bmewburn.vscode-intelephense-client",
-        "neilbrayfield.php-docblocker"
+        "bmewburn.vscode-intelephense-client"
       ]
     }
   },
@@ -18,6 +22,5 @@
       "label": "WordPress Site",
       "onAutoForward": "openBrowser"
     }
-  },
-  "postCreateCommand": "chown -R www-data:www-data /var/www/html/wp-content/plugins/zonebac"
+  }
 }
