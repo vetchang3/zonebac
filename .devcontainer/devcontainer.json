@@ -4,11 +4,19 @@
   "service": "wordpress",
   "workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
   "postStartCommand": "bash .devcontainer/setup.sh",
-  "forwardPorts": [8080],
+  "forwardPorts": [80],
   "portsAttributes": {
-    "8080": {
-      "label": "WordPress Site",
+    "80": {
+      "label": "ZoneBac Site",
       "onAutoForward": "openBrowser"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "xdebug.php-debug",
+        "bmewburn.vscode-intelephense-client"
+      ]
     }
   }
 }
