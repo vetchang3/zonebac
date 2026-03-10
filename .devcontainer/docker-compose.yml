@@ -22,7 +22,7 @@ services:
       WORDPRESS_DEBUG: 1
     volumes:
       # On monte le dossier courant (votre plugin) dans le dossier plugins de WP
-      - ..:/var/www/html/wp-content/plugins/zonebac-lms
+      - ..:/var/www/html/wp-content/plugins/zonebac
       # Volume pour persister les données si besoin
       - wp_data:/var/www/html
 
