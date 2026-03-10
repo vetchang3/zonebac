@@ -1,21 +1,9 @@
 {
-  "name": "WordPress Plugin Dev",
+  "name": "ZoneBac Plugin Dev",
   "dockerComposeFile": "docker-compose.yml",
   "service": "wordpress",
   "workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
   "postStartCommand": "bash .devcontainer/setup.sh",
-  "customizations": {
-    "vscode": {
-      "settings": {
-        "php.suggest.basic": false,
-        "telemetry.enableTelemetry": false
-      },
-      "extensions": [
-        "xdebug.php-debug",
-        "bmewburn.vscode-intelephense-client"
-      ]
-    }
-  },
   "forwardPorts": [8080],
   "portsAttributes": {
     "8080": {
