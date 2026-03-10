@@ -1,0 +1,23 @@
+{
+  "name": "WordPress Plugin Dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "wordpress",
+  "workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "xdebug.php-debug",
+        "bmewburn.vscode-intelephense-client",
+        "neilbrayfield.php-docblocker"
+      ]
+    }
+  },
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "WordPress Site",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "postCreateCommand": "chown -R www-data:www-data /var/www/html/wp-content/plugins/zonebac"
+}
