@@ -1,0 +1,20 @@
+tasks:
+  - name: Start WordPress (docker-compose)
+    init: |
+      # build et lancer les services en arrière-plan
+      docker-compose up -d --build
+      # attendre WP
+      ./.gitpod/wait-for-wordpress.sh
+    command: |
+      # garder le workspace vivant et donner un shell
+      bash
+
+ports:
+  - port: 8080
+    onOpen: open-browser
+    visibility: public
+
+vscode:
+  extensions:
+    - bmewburn.vscode-intelephense-client
+    - xdebug.php-debug
