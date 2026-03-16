@@ -14,10 +14,12 @@ services:
 
   wordpress:
     image: wordpress:latest
+    container_name: wordpress
     depends_on:
       - db
-    ports:
-      - "80:80"
+    # expose -> expose seulement le port du conteneur (Codespaces forwardera)
+    expose:
+      - "80"
     restart: always
     environment:
       WORDPRESS_DB_HOST: db
