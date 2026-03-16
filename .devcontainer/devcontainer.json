@@ -1,8 +1,10 @@
 {
   "name": "ZoneBac Plugin Dev",
   "dockerComposeFile": "docker-compose.yml",
-  //"service": "wordpress",
-  //"workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
+  "service": "wordpress",
+  "workspaceFolder": "/var/www/html/wp-content/plugins/zonebac",
+  "runServices": ["db", "wordpress"],
+  "shutdownAction": "stopCompose",
   "postStartCommand": "bash .devcontainer/setup.sh",
   "forwardPorts": [80],
   "portsAttributes": {
