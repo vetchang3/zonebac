@@ -286,7 +286,7 @@ class Zonebac_Smart_Engine
         return Zonebac_DeepSeek_API::call_deepseek_raw($prompt);
     }
 
-    public static function identify_sections_only($extracted_text)
+    public static function identify_sections_only($extracted_text, $file_id = 0)
     {
         if (empty($extracted_text)) return [];
 
@@ -317,7 +317,27 @@ class Zonebac_Smart_Engine
         }
 
         $data = json_decode($response, true);
-        return $data['sections'] ?? [];
+        $sections = $data['sections'] ?? [];
+
+        // 2. Persistance en BD si un file_id est fourni [cite: 2025-11-16]
+        if ($file_id > 0 && !empty($sections)) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'zb_pdf_sections';
+
+            // On nettoie les anciennes extractions pour ce fichier avant de réécrire
+            $wpdb->delete($table, ['file_id' => $file_id]);
+
+            foreach ($sections as $sec) {
+                $wpdb->insert($table, [
+                    'file_id'       => $file_id,
+                    'section_title' => sanitize_text_field($sec['title']),
+                    'raw_content'   => wp_unslash($sec['content']), // Garde le LaTeX pur
+                    'status'        => 'extracted'
+                ]);
+            }
+        }
+
+        return $sections;
     }
 
     public static function match_notions_to_sections($sections_html)

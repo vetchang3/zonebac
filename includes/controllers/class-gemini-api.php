@@ -9,10 +9,7 @@ class Zonebac_Gemini_API
      */
     private static function get_api_key()
     {
-        // Utilisation de ton modèle de paramètres existant
         $settings = Zonebac_Settings_Model::get_settings();
-        error_log("ZB SETTINGS " . $settings);
-
         return $settings['gemini_key'] ?? '';
     }
 

@@ -98,6 +98,23 @@ class Zonebac_DB_Manager
             PRIMARY KEY  (id)
         ) $charset_collate;";
 
+
+
+        // Dans la méthode create_tables() de class-db-manager.php
+        $table_sections = $wpdb->prefix . 'zb_pdf_sections';
+        $sql_pdf_sections[] = "CREATE TABLE $table_sections (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            file_id bigint(20) NOT NULL,
+            section_title varchar(255) NOT NULL,
+            raw_content longtext NOT NULL,
+            notion_id bigint(20) DEFAULT NULL,
+            status varchar(50) DEFAULT 'extracted',
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY file_id (file_id)
+        ) $charset_collate;";
+
+        dbDelta($sql_pdf_sections);
         dbDelta($sql_ingestion);
         dbDelta($sql_relations);
         dbDelta($sql_questions);

@@ -114,7 +114,41 @@
       });
     });
 
+    // Dans admin-generator.js
+    $(document).on('click', '.btn-generate-ex', function(e) {
+        e.preventDefault();
+        const $btn = $(this);
+        const sectionIndex = $btn.data('section-id');
+        const $card = $btn.closest('.zb-section-card');
+
+        $btn.prop('disabled', true).html('<span class="dashicons dashicons-update spin"></span> Génération...');
+
+        $.ajax({
+            url: zbData.rest_url + 'zonebac/v1/generate-single-exercise',
+            method: 'POST',
+            beforeSend: function(xhr) {
+                xhr.setRequestHeader('X-WP-Nonce', zbData.nonce);
+            },
+            data: {
+                file_id: $('#zb_file_id').val(), // Assure-toi d'avoir cet ID dans ta vue
+                section_index: sectionIndex
+            },
+            success: function(response) {
+                if (response.success) {
+                    $card.append('<div style="padding:15px; background:#064e3b; color:#10b981; border-top:1px solid #065f46;">✅ Exercice généré et ajouté à la banque !</div>');
+                    $btn.remove(); // On enlève le bouton après succès
+                }
+            },
+            error: function() {
+                $btn.prop('disabled', false).text('Réessayer');
+                alert('Erreur lors de la génération.');
+            }
+        });
+    });
+
 
 
   });
+
+
 })(jQuery);

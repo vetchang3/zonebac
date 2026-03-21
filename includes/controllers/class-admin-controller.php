@@ -40,86 +40,60 @@ class Zonebac_Admin_Controller
 
     public function ajax_analyze_step_1()
     {
-        set_time_limit(180); // Autorise le script à tourner pendant 3 minutes
-
+        set_time_limit(180);
         $file_id = intval($_POST['file_id'] ?? 0);
+        check_ajax_referer('zb_ingestion_nonce', 'nonce');
 
-        error_log("ZB DEBUG: Début de l'appel AJAX pour le fichier ID " . $file_id);
-        // Vérification du Nonce
-        if (!check_ajax_referer('zb_ingestion_nonce', 'nonce', false)) {
-            error_log("ZB DEBUG ERROR: Échec de la vérification du Nonce.");
-            wp_send_json_error('Nonce invalide');
-        }
-        $cache_key = 'zb_full_analysis_' . $file_id;
-        error_log("ZB DEBUG: Lancement de l'IA (Smart Engine)...");
-        error_log("ZB DEBUG: Recherche du cache pour la clé " . $cache_key);
+        global $wpdb;
+        $table_sections = $wpdb->prefix . 'zb_pdf_sections';
 
-        $html = get_transient($cache_key);
+        // 1. TENTATIVE DE RÉCUPÉRATION DEPUIS LA BD (Économie d'IA) [cite: 2026-03-21]
+        $existing_sections = $wpdb->get_results($wpdb->prepare(
+            "SELECT section_title as title, raw_content as content FROM $table_sections WHERE file_id = %d",
+            $file_id
+        ), ARRAY_A);
 
-        if (false === $html) {
-
-            error_log("ZB DEBUG: Pas de cache. Lancement de l'IA (Smart Engine)...");
-            // 1. Extraction et Découpage
-            $raw_text = Zonebac_Smart_Engine::analyze_pdf_content_step_1($file_id);
-            $sections = Zonebac_Smart_Engine::identify_sections_only($raw_text);
-
-            // 2. Traitement IA (Mapping + Scénarisation)
-            // Le type 'Type Bac' sera dynamique via l'interface d'upload prochainement
-            // $analysis_results = Zonebac_Smart_Engine::process_full_pedagogy($sections, 'Type Bac');
-
-            // 3. Construction du HTML de Prévisualisation pour validation humaine
-            ob_start();
-?>
-            <div class="zb-preview-container" style="background: #f8fafc; padding: 20px;">
-                <h2 style="color: #1e293b; border-bottom: 2px solid #38bdf8; padding-bottom: 10px; margin-bottom: 20px;">
-                    <span class="dashicons dashicons-visibility"></span>
-                    Contrôle du Découpage (<?php echo is_array($sections) ? count($sections) : 0; ?> sections détectées)
-                </h2>
-
-                <?php if (empty($sections) || !is_array($sections)) : ?>
-                    <div class="notice notice-error" style="padding: 15px; background: #fee2e2; border-left: 4px solid #ef4444;">
-                        <p><strong>Aucune section n'a été identifiée.</strong> Vérifiez le texte brut extrait du PDF ou le prompt de découpage.</p>
-                    </div>
-                <?php else : ?>
-                    <div class="zb-sections-list">
-                        <?php foreach ($sections as $index => $section) : ?>
-                            <?php
-                            // SÉCURITÉ ANTI-CRASH : On vérifie si $section est bien un tableau avant d'accéder aux clés
-                            $is_valid = is_array($section) && isset($section['title']);
-                            $display_title = $is_valid ? $section['title'] : "Section #" . ($index + 1);
-                            $display_content = $is_valid ? $section['content'] : (is_string($section) ? $section : 'Contenu illisible');
-                            ?>
-                            <div class="zb-debug-block" style="background: white; border: 1px solid #cbd5e1; border-radius: 12px; margin-bottom: 25px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-
-                                <div style="background: #334155; color: white; padding: 12px 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center;">
-                                    <span>#<?php echo $index + 1; ?> - <?php echo esc_html($display_title); ?></span>
-                                    <span style="font-size: 10px; background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 4px;">
-                                        <?php echo strlen($display_content); ?> CARACTÈRES
-                                    </span>
-                                </div>
-
-                                <div style="padding: 20px; font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; background: #f1f5f9; max-height: 350px; overflow-y: auto; color: #1e293b; border-bottom: 1px solid #e2e8f0;">
-                                    <?php echo esc_html($display_content); ?>
-                                </div>
-
-                                <div style="padding: 10px 20px; background: #f8fafc; text-align: right;">
-                                    <span style="font-size: 11px; color: #64748b; font-style: italic;">Prêt pour la composition pédagogique</span>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
-            </div>
-
-<?php
-            $html = ob_get_clean();
-
-            // On stocke le HTML généré pendant 12 heures
-            set_transient($cache_key, $html, 12 * HOUR_IN_SECONDS);
-            error_log("ZB DEBUG: Analyse IA terminée avec succès.");
+        if (!empty($existing_sections)) {
+            error_log("ZB DEBUG: Récupération des sections depuis la base de données pour le fichier $file_id");
+            $sections = $existing_sections;
         } else {
-            error_log("ZB DEBUG: Récupération des données depuis le cache.");
+            // 2. SI VIDE : LANCEMENT DU FLUX IA COMPLET [cite: 2026-03-21]
+            error_log("ZB DEBUG: Aucune donnée en BD. Lancement de l'extraction IA...");
+            $raw_text = Zonebac_Smart_Engine::analyze_pdf_content_step_1($file_id);
+
+            // On passe le file_id pour que la fonction sauvegarde automatiquement [cite: 2026-03-21]
+            $sections = Zonebac_Smart_Engine::identify_sections_only($raw_text, $file_id);
         }
+
+        // 3. AFFICHAGE DU RENDU (On réutilise ton HTML Navy/Wahou) [cite: 2025-11-16]
+        ob_start();
+?>
+        <div class="zb-preview-container" style="background: #0f172a; padding: 25px; border-radius: 12px;">
+            <h2 style="color: #38bdf8; border-bottom: 2px solid #38bdf8; padding-bottom: 15px;">
+                <span class="dashicons dashicons-database-import"></span>
+                Sections Extraites (<?php echo count($sections); ?>)
+            </h2>
+
+            <div class="zb-sections-grid" style="display: grid; gap: 20px; margin-top: 20px;">
+                <?php foreach ($sections as $index => $sec) : ?>
+                    <div class="zb-section-card" style="background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow: hidden;">
+                        <div style="background: #334155; padding: 10px 20px; color: #38bdf8; font-weight: bold; display: flex; justify-content: space-between;">
+                            <span><?php echo esc_html($sec['title']); ?></span>
+                            <button class="button button-primary btn-generate-ex"
+                                data-section-id="<?php echo $index; ?>"
+                                style="background: #10b981; border: none; font-size: 11px;">
+                                Générer 10 Questions
+                            </button>
+                        </div>
+                        <div style="padding: 15px; color: #cbd5e1; font-family: monospace; font-size: 12px; max-height: 150px; overflow-y: auto;">
+                            <?php echo nl2br(htmlspecialchars($sec['content'])); ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+<?php
+        $html = ob_get_clean();
         wp_send_json_success(['html' => $html]);
     }
 
