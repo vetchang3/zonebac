@@ -122,14 +122,30 @@ class Zonebac_Exercise_Generator
         $exercise = json_decode(trim($clean_json), true);
 
         if ($exercise && isset($exercise['questions'])) {
+            $total_points = 0;
+            $difficulty_counts = ['Facile' => 0, 'Moyen' => 0, 'Difficile' => 0];
+
+            foreach ($exercise['questions'] as &$q) {
+                $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
+                $difficulty_counts[$diff]++;
+
+                $p = ($diff === 'Facile') ? 1 : (($diff === 'Difficile') ? 5 : 3);
+                $q['points'] = $p;
+                $total_points += $p;
+            }
+
+            arsort($difficulty_counts);
+            $global_diff = key($difficulty_counts);
+
             $wpdb->insert(
                 $wpdb->prefix . 'zb_exercises',
                 [
-                    'notion_id'     => $notion_id, // Sera 0 pour les extractions
+                    'notion_id'     => $notion_id,
                     'title'         => sanitize_text_field($exercise['exercise_title']),
                     'subject_text'  => wp_kses_post($exercise['subject_text']),
-                    // On stocke tout l'objet JSON pour garder les metadata [cite: 2026-02-23]
-                    'exercise_data' => json_encode($exercise, JSON_UNESCAPED_UNICODE),
+                    'exercise_data' => json_encode($exercise['questions'], JSON_UNESCAPED_UNICODE),
+                    'total_points'  => $total_points, // Stockage du score [cite: 2026-03-21]
+                    'difficulty'    => $global_diff,   // Stockage de la difficulté [cite: 2026-03-21]
                     'created_at'    => current_time('mysql')
                 ]
             );

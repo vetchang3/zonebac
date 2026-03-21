@@ -114,38 +114,48 @@
       });
     });
 
-    // Dans admin-generator.js
-    $(document).on('click', '.btn-generate-ex', function(e) {
+   $(document).on('click', '.btn-generate-ex', function(e) {
         e.preventDefault();
         const $btn = $(this);
-        const sectionIndex = $btn.data('section-id');
+        const sectionIndex = $btn.data('section-id'); 
         const $card = $btn.closest('.zb-section-card');
+        
+        // On récupère l'ID du fichier depuis le bouton d'analyse principal
+        const fileId = $('.zb-btn-analyze').first().data('file-id'); 
 
-        $btn.prop('disabled', true).html('<span class="dashicons dashicons-update spin"></span> Génération...');
+        // État visuel "Wahou" [cite: 2025-11-16]
+        $btn.prop('disabled', true).html('<span class="dashicons dashicons-update spin"></span> Composition...');
 
         $.ajax({
-            url: zbData.rest_url + 'zonebac/v1/generate-single-exercise',
+            url: ajaxurl, // Utilisation de l'endpoint admin-ajax.php au lieu de REST
             method: 'POST',
-            beforeSend: function(xhr) {
-                xhr.setRequestHeader('X-WP-Nonce', zbData.nonce);
-            },
             data: {
-                file_id: $('#zb_file_id').val(), // Assure-toi d'avoir cet ID dans ta vue
-                section_index: sectionIndex
+                action: 'zb_generate_single_exercise', // Doit correspondre au hook PHP
+                section_id: sectionIndex,
+                file_id: fileId,
+                nonce: zbData.nonce // Le nonce généré par wp_localize_script
             },
             success: function(response) {
                 if (response.success) {
-                    $card.append('<div style="padding:15px; background:#064e3b; color:#10b981; border-top:1px solid #065f46;">✅ Exercice généré et ajouté à la banque !</div>');
-                    $btn.remove(); // On enlève le bouton après succès
+                    $btn.replaceWith(
+                        '<div style="margin-top:10px;">' +
+                        '<span style="color:#10b981; font-weight:bold;">✅ ' + response.data.points + ' pts créés !</span><br>' +
+                        '<a href="' + response.data.url + '" target="_blank" class="button button-small" style="margin-top:5px; background:#0ea5e9; color:white; border:none;">👁️ Voir l\'exercice</a>' +
+                        '</div>'
+                    );
+                    $card.css('border-left', '5px solid #10b981');
+                } else {
+                    alert("Erreur : " + response.data);
+                    $btn.prop('disabled', false).text("Réessayer");
                 }
             },
-            error: function() {
-                $btn.prop('disabled', false).text('Réessayer');
-                alert('Erreur lors de la génération.');
+            error: function(xhr) {
+                console.error("Erreur AJAX:", xhr.status, xhr.responseText);
+                alert("Erreur 403 : Problème de sécurité ou session expirée.");
+                $btn.prop('disabled', false).text("Réessayer");
             }
         });
     });
-
 
 
   });

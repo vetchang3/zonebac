@@ -12,8 +12,6 @@ if (!defined('ABSPATH')) {
 // Chargement des Modèles
 require_once plugin_dir_path(__FILE__) . 'includes/models/class-cpt-notion.php';
 require_once plugin_dir_path(__FILE__) . 'includes/models/class-settings-model.php';
-require_once plugin_dir_path(__FILE__) . 'includes/models/class-db-manager.php';
-
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/trait-generator-form.php';
 
 // Chargement des Contrôleurs
@@ -33,7 +31,6 @@ class ZonebacLMS
     public function __construct()
     {
         new Zonebac_CPT_Notion();
-        register_activation_hook(__FILE__, ['Zonebac_DB_Manager', 'create_tables']);
 
         $admin_controller = new Zonebac_Admin_Controller();
 
@@ -62,6 +59,8 @@ class ZonebacLMS
         // Correction ici : On pointe vers la classe Engine statique
         add_action('zb_smart_cron_hook', ['Zonebac_Smart_Engine', 'run_auto_dispatcher']);
     }
+
+
     public static function run_auto_dispatcher()
     {
         global $wpdb;
@@ -211,4 +210,18 @@ class ZonebacLMS
     }
 }
 
+// 1. Définition de la procédure d'activation (CRÉATION + MIGRATION)
+register_activation_hook(__FILE__, function () {
+    require_once plugin_dir_path(__FILE__) . 'includes/models/class-db-manager.php';
+
+    // Création des tables de base
+    Zonebac_DB_Manager::create_tables();
+
+    // Migration des nouvelles colonnes (total_points, etc.) [cite: 2026-03-21]
+    Zonebac_DB_Manager::migrate_tables();
+
+    flush_rewrite_rules();
+});
+
+// 2. Initialisation de ton plugin [cite: 2025-11-16]
 new ZonebacLMS();

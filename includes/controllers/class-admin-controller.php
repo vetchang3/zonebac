@@ -31,11 +31,62 @@ class Zonebac_Admin_Controller
         add_action('save_post_notion', [get_class($this), 'auto_map_new_notion'], 10, 3);
         add_action('admin_post_zb_handle_file_ingestion', [$this, 'handle_file_ingestion']);
         add_action('wp_ajax_zb_debug_analyze_step_1', [$this, 'ajax_analyze_step_1']);
+        add_action('wp_ajax_zb_generate_single_exercise', [$this, 'ajax_generate_single_exercise']);
 
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
         });
+    }
+
+    public function ajax_generate_single_exercise()
+    {
+        // 1. Vérification de sécurité
+        check_ajax_referer('zb_ingestion_nonce', 'nonce');
+        if (!current_user_can('manage_options')) wp_send_json_error("Accès refusé.");
+
+        global $wpdb;
+
+        // CORRECTION : On utilise 'section_index' pour correspondre au JS
+        $section_index = isset($_POST['section_index']) ? intval($_POST['section_index']) : (isset($_POST['section_id']) ? intval($_POST['section_id']) : 0);
+        $file_id = intval($_POST['file_id']);
+
+        // 2. Récupération de la section
+        $section = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}zb_pdf_sections WHERE file_id = %d LIMIT %d, 1",
+            $file_id,
+            $section_index
+        ), ARRAY_A);
+
+        if (!$section) wp_send_json_error("Section introuvable en base (Index: $section_index).");
+
+        // 3. Composition IA
+        $composed = Zonebac_Smart_Engine::compose_inspired_exercise([
+            'title' => $section['section_title'],
+            'content' => $section['raw_content']
+        ]);
+
+        if (!$composed) wp_send_json_error("L'IA n'a pas pu composer l'exercice.");
+
+        // 4. Sauvegarde avec Notion ID = 0 pour l'ingestion
+        $wpdb->insert($wpdb->prefix . 'zb_exercises', [
+            'notion_id'      => 0, // Crucial pour l'ingestion [cite: 2026-03-21]
+            'title'          => $composed['exercise_title'] ?? $section['section_title'],
+            'subject_text'   => $composed['subject_text'],
+            'exercise_data'  => json_encode($composed['questions'], JSON_UNESCAPED_UNICODE),
+            'total_points'   => $composed['total_calculated_points'],
+            'origin_file_id' => $file_id,
+            'difficulty'     => $composed['global_difficulty'] ?? 'Moyen'
+        ]);
+
+        $new_id = $wpdb->insert_id;
+        $preview_url = admin_url('admin.php?page=zonebac-ex-gen&preview_exercise=' . $new_id);
+        wp_send_json_success([
+            'points' => $composed['total_calculated_points'],
+            'url'    => $preview_url,
+            'message' => "Exercice de " . $composed['total_calculated_points'] . " points créé !",
+            'id'      => $new_id
+        ]);
     }
 
     public function ajax_analyze_step_1()
@@ -257,30 +308,42 @@ class Zonebac_Admin_Controller
                 $questions = json_decode($exercise->exercise_data, true);
 
                 ob_start();
-                echo '<div class="zb-exercise-preview" style="max-width:800px; margin:auto;">';
-                echo '<h1>' . esc_html($exercise->title) . '</h1>';
-                echo '<div class="zb-subject" style="background:#fff; padding:20px; border:1px solid #eee; border-radius:8px; margin-bottom:30px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">';
+                echo '<div class="zb-exercise-preview" style="max-width:800px; margin:auto; font-family: sans-serif;">';
 
-                // Calcule le total des points de l'exercice
-                $total_points = array_sum(array_column($questions, 'points'));
-                echo '<div style="margin-bottom: 20px; text-align: right; font-weight: bold; color: #0ea5e9;">';
-                echo 'Score total de l\'exercice : ' . $total_points . ' points';
+                // 1. TITRE DE L'EXERCICE
+                echo '<h1 style="color: #1e293b; margin-bottom: 10px;">' . esc_html($exercise->title) . '</h1>';
+
+                // 2. BADGE DE DIFFICULTÉ ET SCORE TOTAL (L'ajout demandé) [cite: 2025-11-16]
+                $color_map = ['Facile' => '#22c55e', 'Moyen' => '#f59e0b', 'Difficile' => '#ef4444'];
+                $diff_color = $color_map[$exercise->difficulty] ?? '#64748b';
+
+                echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; padding: 10px 0; border-bottom: 1px solid #e2e8f0;">';
+                echo '<span style="background:' . $diff_color . '; color:white; padding:6px 15px; border-radius:20px; font-weight:bold; font-size:13px; text-transform: uppercase;">';
+                echo 'Niveau : ' . esc_html($exercise->difficulty);
+                echo '</span>';
+                echo '<span style="font-weight: bold; color: #0ea5e9; font-size:16px;">';
+                echo 'Barème Total : ' . intval($exercise->total_points) . ' points';
+                echo '</span>';
                 echo '</div>';
 
+                // 3. ÉNONCÉ / SUJET
+                echo '<div class="zb-subject" style="background:#fff; padding:25px; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:30px; box-shadow:0 4px 6px rgba(0,0,0,0.05); line-height: 1.6;">';
+                echo '<strong style="display:block; margin-bottom:10px; color: #64748b; text-transform: uppercase; font-size: 12px;">Énoncé du sujet</strong>';
                 echo wpautop($exercise->subject_text);
                 echo '</div>';
 
+                // 4. BOUCLE DES QUESTIONS
                 foreach ($questions as $i => $q) {
-                    echo '<div class="zb-q-item" style="margin-bottom:40px; padding:20px; background:#fdfdfd; border-left:5px solid #0073aa; box-shadow:0 2px 4px rgba(0,0,0,0.05);">';
-                    echo '<h3 style="display: flex; justify-content: space-between; align-items: center;">';
-                    echo '<span>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#666;">(' . esc_html($q['type'] ?? 'single') . ')</span></span>';
-                    echo '<span style="font-size:0.7em; background:#f1f5f9; padding:2px 8px; border-radius:5px; border:1px solid #e2e8f0;">' . intval($q['points'] ?? 1) . ' pts</span>';
+                    echo '<div class="zb-q-item" style="margin-bottom:40px; padding:25px; background:#f8fafc; border-left:5px solid #0073aa; border-radius: 0 12px 12px 0; box-shadow:0 2px 4px rgba(0,0,0,0.05);">';
+                    echo '<h3 style="display: flex; justify-content: space-between; align-items: center; margin-top: 0;">';
+                    echo '<span>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#64748b; font-weight: normal;">(' . esc_html($q['type'] ?? 'single') . ')</span></span>';
+                    echo '<span style="font-size:0.7em; background:#fff; color: #0073aa; padding:4px 10px; border-radius:6px; border:1px solid #0073aa;">' . intval($q['points'] ?? 1) . ' pts</span>';
                     echo '</h3>';
-                    echo '<p>' . wpautop($q['question']) . '</p>';
 
-                    echo '<div class="zb-options-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
+                    echo '<div style="margin-bottom: 20px; font-size: 16px;">' . wpautop($q['question']) . '</div>';
+
+                    echo '<div class="zb-options-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">';
                     foreach ($q['options'] as $idx => $opt) {
-                        // Logique de vérification de la réponse (string ou array)
                         $is_correct = false;
                         if (is_array($q['answer'])) {
                             $is_correct = in_array($opt, $q['answer']);
@@ -289,16 +352,18 @@ class Zonebac_Admin_Controller
                         }
 
                         $bg = $is_correct ? '#dcfce7' : '#fff';
-                        $border = $is_correct ? '#22c55e' : '#ddd';
+                        $border = $is_correct ? '#22c55e' : '#cbd5e1';
+                        $color = $is_correct ? '#166534' : '#1e293b';
 
-                        echo '<div style="padding:10px; border:1px solid ' . $border . '; background:' . $bg . '; border-radius:5px;">';
-                        echo '<strong>' . chr(65 + $idx) . '.</strong> ' . esc_html($opt);
+                        echo '<div style="padding:12px; border:1px solid ' . $border . '; background:' . $bg . '; color:' . $color . '; border-radius:8px; font-size: 14px;">';
+                        echo '<strong style="margin-right:8px;">' . chr(65 + $idx) . '.</strong> ' . esc_html($opt);
+                        if ($is_correct) echo ' <span style="float:right;">✅</span>';
                         echo '</div>';
                     }
                     echo '</div>';
 
-                    echo '<div style="margin-top:15px; font-size:0.9em; color:#555; font-style:italic;">';
-                    echo '<strong>Correction :</strong> ' . wpautop($q['explanation']);
+                    echo '<div style="margin-top:20px; padding: 15px; background:#eff6ff; border-radius: 8px; font-size:14px; color:#1e40af; border: 1px solid #dbeafe;">';
+                    echo '<strong>Correction détaillée :</strong> ' . wpautop($q['explanation']);
                     echo '</div>';
                     echo '</div>';
                 }
@@ -386,21 +451,16 @@ class Zonebac_Admin_Controller
                 'zonebac-admin-js',
                 $js_url . 'admin-generator.js',
                 ['jquery'],
-                filemtime($script_file), // Versionnage dynamique
+                filemtime($script_file),
                 true
             );
 
-            // Passage des données à la vue JS
+            // UN SEUL APPEL : On regroupe tout ici [cite: 2025-11-16]
             wp_localize_script('zonebac-admin-js', 'zbData', [
-                'rest_url' => get_rest_url()
+                'rest_url' => get_rest_url(),
+                'nonce'    => wp_create_nonce('zb_ingestion_nonce') // Ce nom doit correspondre au check_ajax_referer
             ]);
         }
-
-        // --- CORRECTIF ERREUR 403 (NONCE) ---
-        wp_localize_script('zonebac-admin-js', 'zbData', [
-            'rest_url' => get_rest_url(),
-            'nonce'    => wp_create_nonce('zb_ingestion_nonce')
-        ]);
 
         // 3. MathJax (Chargement avec priorité haute)
         wp_enqueue_script(
@@ -524,6 +584,14 @@ class Zonebac_Admin_Controller
             'callback' => [$this, 'get_hierarchy_data'],
             'permission_callback' => '__return_true'
         ]);
+
+        register_rest_route('zonebac/v1', '/generate-single-exercise', [
+            'methods'  => 'POST',
+            'callback' => [$this, 'rest_generate_single_exercise'],
+            'permission_callback' => function () {
+                return current_user_can('manage_options'); // Sécurité d'expert 
+            }
+        ]);
     }
 
     public function get_hierarchy_data($request)
@@ -576,11 +644,16 @@ class Zonebac_Admin_Controller
 
     public function render_ex_bank_view()
     {
-        // Chargement de la table
+        // 1. Chargement de la classe de la table
         require_once plugin_dir_path(__FILE__) . 'class-exercise-bank-table.php';
-        $ex_bank_table = new Zonebac_Exercise_Bank_Table();
 
-        // Inclusion de la vue que nous avons créée précédemment
+        // 2. Initialisation : ATTENTION au nom de la variable ($bank_table)
+        $bank_table = new Zonebac_Exercise_Bank_Table();
+
+        // 3. Préparation des éléments (Important pour éviter le Fatal Error)
+        $bank_table->prepare_items();
+
+        // 4. Inclusion de la vue
         include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-bank-page.php';
     }
 
@@ -736,5 +809,46 @@ class Zonebac_Admin_Controller
         exit;
         // wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#smart-mode'));
         // exit;
+    }
+
+    public function rest_generate_single_exercise($request)
+    {
+        $section_index = intval($request->get_param('section_index'));
+        $file_id       = intval($request->get_param('file_id'));
+
+        global $wpdb;
+
+        // 1. Récupération de la section en BD [cite: 2026-03-21]
+        $section = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}zb_pdf_sections WHERE file_id = %d LIMIT %d, 1",
+            $file_id,
+            $section_index
+        ), ARRAY_A);
+
+        if (!$section) {
+            return new WP_Error('no_section', 'Section introuvable en base de données.', ['status' => 404]);
+        }
+
+        // 2. Composition via l'IA [cite: 2026-03-21]
+        $composed = Zonebac_Smart_Engine::compose_inspired_exercise([
+            'title'   => $section['section_title'],
+            'content' => $section['raw_content']
+        ]);
+
+        if (!$composed) {
+            return new WP_Error('ai_error', 'L\'IA n\'a pas pu générer l\'exercice.', ['status' => 500]);
+        }
+
+        // 3. Sauvegarde finale [cite: 2026-03-21]
+        $wpdb->insert($wpdb->prefix . 'zb_exercises', [
+            'title'          => $composed['exercise_title'] ?? $section['section_title'],
+            'subject_text'   => $composed['subject_text'],
+            'exercise_data'  => json_encode($composed['questions'], JSON_UNESCAPED_UNICODE),
+            'total_points'   => $composed['total_calculated_points'],
+            'difficulty'     => $composed['global_difficulty'] ?? 'Moyen',
+            'origin_file_id' => $file_id
+        ]);
+
+        return new WP_REST_Response(['success' => true, 'points' => $composed['total_calculated_points']], 200);
     }
 }

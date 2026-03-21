@@ -18,14 +18,16 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
     public function get_columns()
     {
         return [
-            'cb'       => '<input type="checkbox" />',
-            'title'    => 'Titre de l\'Exercice',
-            'classe'   => 'Classe',
-            'matiere'  => 'Matière',
-            'notion'   => 'Notion',
-            'source'   => 'Source / Origine',
-            'q_count'  => 'Questions',
-            'date'     => 'Date'
+            'cb'         => '<input type="checkbox" />',
+            'title'      => 'Titre de l\'Exercice',
+            'difficulty' => 'Difficulté', // AJOUTÉ
+            'total_points' => 'Points',   // AJOUTÉ
+            'classe'     => 'Classe',
+            'matiere'    => 'Matière',
+            'notion'     => 'Notion',
+            'source'     => 'Source / Origine',
+            'q_count'    => 'Questions',
+            'date'       => 'Date'
         ];
     }
 
@@ -99,16 +101,21 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         $notion_id = $item['notion_id'];
         switch ($column_name) {
             case 'classe':
-                return wp_get_post_terms($notion_id, 'classe')[0]->name ?? '-';
+                return ($notion_id > 0) ? $this->get_term_name($notion_id, 'classe') : '<span class="description">Extraite du PDF</span>';
             case 'matiere':
-                return wp_get_post_terms($notion_id, 'matiere')[0]->name ?? '-';
+                return ($notion_id > 0) ? $this->get_term_name($notion_id, 'matiere') : '<span class="description">Extraite du PDF</span>';
             case 'notion':
-                // Si c'est une archive (notion_id = 0), on affiche "Archive"
-                return ($notion_id == 0) ? '<strong>Archive</strong>' : get_the_title($notion_id);
-            case 'source':
-                return $this->column_source($item); // Appel explicite
+                return ($notion_id > 0) ? get_the_title($notion_id) : '<em>Non classé (Ingestion)</em>';
             case 'date':
                 return date('d/m/Y H:i', strtotime($item['created_at']));
+            case 'source':
+                return $this->column_source($item); // Appel explicite
+            case 'difficulty':
+                $colors = ['Facile' => '#22c55e', 'Moyen' => '#f59e0b', 'Difficile' => '#ef4444'];
+                $color = $colors[$item['difficulty']] ?? '#64748b';
+                return sprintf('<span style="color:%s; font-weight:bold;">%s</span>', $color, $item['difficulty']);
+            case 'total_points':
+                return '<strong>' . $item['total_points'] . ' pts</strong>';
             default:
                 return '-';
         }
@@ -119,13 +126,15 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         global $wpdb;
         $table = $wpdb->prefix . 'zb_exercises';
 
-        // Gestion de la suppression
+        // Suppression
         if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
             $wpdb->delete($table, ['id' => intval($_GET['id'])]);
         }
 
-        $per_page = 10;
+        $per_page = 20;
         $current_page = $this->get_pagenum();
+
+        // On compte TOUT [cite: 2026-03-21]
         $total_items = $wpdb->get_var("SELECT COUNT(*) FROM $table");
 
         $this->set_pagination_args([
@@ -134,11 +143,12 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         ]);
 
         $offset = ($current_page - 1) * $per_page;
-        $this->items = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM $table ORDER BY created_at DESC LIMIT %d OFFSET %d",
-            $per_page,
-            $offset
-        ), ARRAY_A);
+
+        // On récupère TOUT par date décroissante
+        $this->items = $wpdb->get_results(
+            "SELECT * FROM $table ORDER BY created_at DESC LIMIT $offset, $per_page",
+            ARRAY_A
+        );
 
         $this->_column_headers = [$this->get_columns(), [], []];
     }

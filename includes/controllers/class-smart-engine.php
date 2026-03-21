@@ -461,4 +461,48 @@ class Zonebac_Smart_Engine
 
         return $final_data;
     }
+
+    public static function compose_inspired_exercise($section_data)
+    {
+        $api = new Zonebac_DeepSeek_API();
+
+        // 15 questions pour un "Problème", 10 sinon [cite: 2026-03-21]
+        $is_probleme = (stripos($section_data['title'], 'Problème') !== false);
+        $count = $is_probleme ? 15 : 10;
+
+        $params = [
+            'pdf_source_content' => $section_data['content'],
+            'count'    => $count,
+            'classe'   => 'Terminale',
+            'matiere'  => 'Mathématiques',
+            'spirit'   => 'Baccalauréat / Devoir de classe',
+        ];
+
+        $generated_json = $api->generate_exercise_batch($params);
+        $data = json_decode($generated_json, true);
+
+        if ($data && isset($data['questions'])) {
+            $total_score = 0;
+            $difficulty_counts = ['Facile' => 0, 'Moyen' => 0, 'Difficile' => 0];
+
+            foreach ($data['questions'] as &$q) {
+                $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
+                $difficulty_counts[$diff]++;
+
+                // Barème expert : Facile=1, Moyen=3, Difficile=5 [cite: 2026-03-21]
+                if ($diff === 'Facile') $q['points'] = 1;
+                elseif ($diff === 'Difficile') $q['points'] = 5;
+                else $q['points'] = 3;
+
+                $total_score += $q['points'];
+            }
+
+            // Détermination de la difficulté globale (la majorité l'emporte)
+            arsort($difficulty_counts);
+            $data['global_difficulty'] = key($difficulty_counts);
+            $data['total_calculated_points'] = $total_score;
+        }
+
+        return $data;
+    }
 }

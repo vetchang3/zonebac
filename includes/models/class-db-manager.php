@@ -92,7 +92,7 @@ class Zonebac_DB_Manager
             file_path varchar(255) NOT NULL,
             origin_info varchar(255) NOT NULL,
             matiere_id bigint(20) NOT NULL,
-            status varchar(20) DEFAULT 'pending', -- pending, processing, completed, failed
+            status varchar(20) DEFAULT 'pending', 
             total_exercises_found int(11) DEFAULT 0,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id)
@@ -102,7 +102,7 @@ class Zonebac_DB_Manager
 
         // Dans la méthode create_tables() de class-db-manager.php
         $table_sections = $wpdb->prefix . 'zb_pdf_sections';
-        $sql_pdf_sections[] = "CREATE TABLE $table_sections (
+        $sql[] = "CREATE TABLE $table_sections (
             id bigint(20) NOT NULL AUTO_INCREMENT,
             file_id bigint(20) NOT NULL,
             section_title varchar(255) NOT NULL,
@@ -114,7 +114,21 @@ class Zonebac_DB_Manager
             KEY file_id (file_id)
         ) $charset_collate;";
 
-        dbDelta($sql_pdf_sections);
+        $table_ex = $wpdb->prefix . 'zb_exercises';
+        $sql[] = "CREATE TABLE $table_ex (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            notion_id bigint(20) DEFAULT NULL,
+            title varchar(255) NOT NULL,
+            subject_text longtext NOT NULL,
+            exercise_data longtext NOT NULL,
+            total_points int(11) DEFAULT 0,
+            difficulty varchar(50) DEFAULT 'Moyen',
+            origin_file_id bigint(20) DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id)
+        ) $charset_collate;";
+
+        dbDelta($sql);
         dbDelta($sql_ingestion);
         dbDelta($sql_relations);
         dbDelta($sql_questions);
@@ -122,5 +136,26 @@ class Zonebac_DB_Manager
         dbDelta($sql_jobs);
         dbDelta($sql_ex_jobs);
         dbDelta($sql_smart_schedules);
+    }
+
+    public static function migrate_tables()
+    {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'zb_exercises';
+
+        // Liste des colonnes à vérifier [cite: 2026-03-21]
+        $columns_to_add = [
+            'total_points'   => "ADD COLUMN total_points int(11) DEFAULT 0 AFTER exercise_data",
+            'difficulty'     => "ADD COLUMN difficulty varchar(50) DEFAULT 'Moyen' AFTER total_points",
+            'origin_file_id' => "ADD COLUMN origin_file_id bigint(20) DEFAULT NULL AFTER difficulty"
+        ];
+
+        foreach ($columns_to_add as $col_name => $sql_part) {
+            $exists = $wpdb->get_results($wpdb->prepare("SHOW COLUMNS FROM $table_name LIKE %s", $col_name));
+            if (empty($exists)) {
+                $wpdb->query("ALTER TABLE $table_name $sql_part");
+                error_log("ZB DEBUG: Colonne $col_name ajoutée avec succès.");
+            }
+        }
     }
 }
