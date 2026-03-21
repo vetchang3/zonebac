@@ -30,10 +30,7 @@ class Zonebac_Admin_Controller
         add_action('admin_post_zb_run_notion_mapping', [$this, 'handle_run_notion_mapping']);
         add_action('save_post_notion', [get_class($this), 'auto_map_new_notion'], 10, 3);
         add_action('admin_post_zb_handle_file_ingestion', [$this, 'handle_file_ingestion']);
-        add_action('admin_post_zb_save_dispatcher_status', [$this, 'handle_save_dispatcher_status']);
-        add_action('wp_ajax_zb_get_exercise_preview', [$this, 'ajax_get_exercise_preview']);
-
-
+        add_action('wp_ajax_zb_debug_analyze_step_1', [$this, 'ajax_analyze_step_1']);
 
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
@@ -41,38 +38,141 @@ class Zonebac_Admin_Controller
         });
     }
 
-    public function render_exercise_generator_view()
+    public function ajax_analyze_step_1()
     {
-        global $wpdb;
-        $editing_exercise = null;
+        set_time_limit(180); // Autorise le script à tourner pendant 3 minutes
 
-        // On intercepte l'ID présent dans ton URL : exercise_id=19
-        if (isset($_GET['exercise_id'])) {
-            $ex_id = intval($_GET['exercise_id']);
-            $editing_exercise = $wpdb->get_row($wpdb->prepare(
-                "SELECT * FROM {$wpdb->prefix}zb_exercises WHERE id = %d",
-                $ex_id
-            ));
+        $file_id = intval($_POST['file_id'] ?? 0);
+
+        error_log("ZB DEBUG: Début de l'appel AJAX pour le fichier ID " . $file_id);
+        // Vérification du Nonce
+        if (!check_ajax_referer('zb_ingestion_nonce', 'nonce', false)) {
+            error_log("ZB DEBUG ERROR: Échec de la vérification du Nonce.");
+            wp_send_json_error('Nonce invalide');
         }
+        $cache_key = 'zb_full_analysis_' . $file_id;
+        error_log("ZB DEBUG: Lancement de l'IA (Smart Engine)...");
+        error_log("ZB DEBUG: Recherche du cache pour la clé " . $cache_key);
 
-        // IMPORTANT : On définit cette variable pour qu'elle soit visible dans exercise-generator-page.php
-        set_query_var('zb_editing_exercise', $editing_exercise);
+        $html = get_transient($cache_key);
 
-        include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-generator-page.php';
+        if (false === $html) {
+
+            error_log("ZB DEBUG: Pas de cache. Lancement de l'IA (Smart Engine)...");
+            // 1. Extraction et Découpage
+            $raw_text = Zonebac_Smart_Engine::analyze_pdf_content_step_1($file_id);
+            $sections = Zonebac_Smart_Engine::identify_sections_only($raw_text);
+
+            // 2. Traitement IA (Mapping + Scénarisation)
+            // Le type 'Type Bac' sera dynamique via l'interface d'upload prochainement
+            // $analysis_results = Zonebac_Smart_Engine::process_full_pedagogy($sections, 'Type Bac');
+
+            // 3. Construction du HTML de Prévisualisation pour validation humaine
+            ob_start();
+?>
+            <div class="zb-preview-container" style="background: #f8fafc; padding: 20px;">
+                <h2 style="color: #1e293b; border-bottom: 2px solid #38bdf8; padding-bottom: 10px; margin-bottom: 20px;">
+                    <span class="dashicons dashicons-visibility"></span>
+                    Contrôle du Découpage (<?php echo is_array($sections) ? count($sections) : 0; ?> sections détectées)
+                </h2>
+
+                <?php if (empty($sections) || !is_array($sections)) : ?>
+                    <div class="notice notice-error" style="padding: 15px; background: #fee2e2; border-left: 4px solid #ef4444;">
+                        <p><strong>Aucune section n'a été identifiée.</strong> Vérifiez le texte brut extrait du PDF ou le prompt de découpage.</p>
+                    </div>
+                <?php else : ?>
+                    <div class="zb-sections-list">
+                        <?php foreach ($sections as $index => $section) : ?>
+                            <?php
+                            // SÉCURITÉ ANTI-CRASH : On vérifie si $section est bien un tableau avant d'accéder aux clés
+                            $is_valid = is_array($section) && isset($section['title']);
+                            $display_title = $is_valid ? $section['title'] : "Section #" . ($index + 1);
+                            $display_content = $is_valid ? $section['content'] : (is_string($section) ? $section : 'Contenu illisible');
+                            ?>
+                            <div class="zb-debug-block" style="background: white; border: 1px solid #cbd5e1; border-radius: 12px; margin-bottom: 25px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+
+                                <div style="background: #334155; color: white; padding: 12px 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center;">
+                                    <span>#<?php echo $index + 1; ?> - <?php echo esc_html($display_title); ?></span>
+                                    <span style="font-size: 10px; background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 4px;">
+                                        <?php echo strlen($display_content); ?> CARACTÈRES
+                                    </span>
+                                </div>
+
+                                <div style="padding: 20px; font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; background: #f1f5f9; max-height: 350px; overflow-y: auto; color: #1e293b; border-bottom: 1px solid #e2e8f0;">
+                                    <?php echo esc_html($display_content); ?>
+                                </div>
+
+                                <div style="padding: 10px 20px; background: #f8fafc; text-align: right;">
+                                    <span style="font-size: 11px; color: #64748b; font-style: italic;">Prêt pour la composition pédagogique</span>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+<?php
+            $html = ob_get_clean();
+
+            // On stocke le HTML généré pendant 12 heures
+            set_transient($cache_key, $html, 12 * HOUR_IN_SECONDS);
+            error_log("ZB DEBUG: Analyse IA terminée avec succès.");
+        } else {
+            error_log("ZB DEBUG: Récupération des données depuis le cache.");
+        }
+        wp_send_json_success(['html' => $html]);
     }
 
-    public function ajax_get_exercise_preview()
+    public function handle_file_ingestion()
     {
         global $wpdb;
-        $id = intval($_POST['id']);
-        $exercise = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}zb_exercises WHERE id = %d", $id));
+        check_admin_referer('zb_ingestion_nonce');
 
-        if ($exercise) {
-            echo "<h2>" . esc_html($exercise->title) . "</h2>";
-            echo "<div class='subject'>" . wpautop($exercise->subject_text) . "</div>";
-            // Décodage des questions...
+        if (!current_user_can('manage_options')) {
+            wp_die('Accès refusé');
         }
-        wp_die();
+
+        // Récupération des tableaux de métadonnées
+        $origins     = $_POST['file_origins'] ?? [];
+        $matiere_ids = $_POST['file_matiere_ids'] ?? [];
+        $files       = $_FILES['zb_archives'] ?? [];
+
+        if (!empty($files['name'][0])) {
+            require_once(ABSPATH . 'wp-admin/includes/file.php');
+
+            // On boucle sur chaque fichier [cite: 2025-11-16]
+            foreach ($files['name'] as $key => $name) {
+                if ($files['error'][$key] !== UPLOAD_ERR_OK) continue;
+
+                // Préparation des données spécifiques au fichier
+                $file_data = [
+                    'name'     => $files['name'][$key],
+                    'type'     => $files['type'][$key],
+                    'tmp_name' => $files['tmp_name'][$key],
+                    'error'    => $files['error'][$key],
+                    'size'     => $files['size'][$key]
+                ];
+
+                // Upload physique via WordPress
+                $upload = wp_handle_upload($file_data, ['test_form' => false]);
+
+                if ($upload && !isset($upload['error'])) {
+                    // Insertion en base de données avec sa matière spécifique
+                    $wpdb->insert($wpdb->prefix . 'zb_file_ingestion', [
+                        'file_name'   => $name,
+                        'file_path'   => $upload['file'],
+                        'matiere_id'  => intval($matiere_ids[$key]),
+                        'origin_info' => sanitize_text_field($origins[$key]),
+                        'status'      => 'pending',
+                        'created_at'  => current_time('mysql')
+                    ]);
+                }
+            }
+        }
+
+        // Redirection avec ancre pour rester sur l'onglet Ingestion
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&success=1#ingestion-mode'));
+        exit;
     }
 
     public static function auto_map_new_notion($post_id, $post, $update)
@@ -107,51 +207,6 @@ class Zonebac_Admin_Controller
         exit;
     }
 
-    public function handle_file_ingestion()
-    {
-        check_admin_referer('zb_ingestion_nonce');
-        if (!current_user_can('manage_options')) return;
-
-        $matiere_id = intval($_POST['matiere_id']);
-        $origins    = $_POST['file_origins'] ?? [];
-
-        if (!empty($_FILES['zb_archives']['name'][0])) {
-            require_once(ABSPATH . 'wp-admin/includes/file.php'); // Sécurité pour wp_handle_upload
-
-            foreach ($_FILES['zb_archives']['name'] as $key => $name) {
-                if ($_FILES['zb_archives']['error'][$key] !== UPLOAD_ERR_OK) continue;
-
-                $file_origin = sanitize_text_field($origins[$key] ?? $name);
-
-                $file_data = [
-                    'name'     => $_FILES['zb_archives']['name'][$key],
-                    'type'     => $_FILES['zb_archives']['type'][$key],
-                    'tmp_name' => $_FILES['zb_archives']['tmp_name'][$key],
-                    'error'    => $_FILES['zb_archives']['error'][$key],
-                    'size'     => $_FILES['zb_archives']['size'][$key]
-                ];
-
-                $upload = wp_handle_upload($file_data, ['test_form' => false]);
-
-                if ($upload && !isset($upload['error'])) {
-                    global $wpdb;
-                    $wpdb->insert($wpdb->prefix . 'zb_file_ingestion', [
-                        'file_name'   => $name,
-                        'file_path'   => $upload['file'],
-                        'matiere_id'  => $matiere_id,
-                        'origin_info' => $file_origin,
-                        'status'      => 'pending',
-                        'created_at'  => current_time('mysql')
-                    ]);
-                }
-            }
-        }
-
-        // REDIRECTION CRUCIALE POUR ÉVITER LA PAGE BLANCHE [cite: 2025-11-16]
-        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&success=1#ingestion-mode'));
-        exit;
-    }
-
     public function handle_save_dispatcher_status()
     {
         check_admin_referer('zb_dispatcher_status_nonce');
@@ -162,7 +217,7 @@ class Zonebac_Admin_Controller
 
         update_option('zb_lms_settings', $settings);
 
-        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#smart-mode'));
+        wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=Status mis à jour#smart-mode'));
         exit;
     }
 
@@ -218,70 +273,59 @@ class Zonebac_Admin_Controller
             }
         }
 
-        // --- CAS 2 : PREVIEW D'UN EXERCICE COMPLET (ARCHIVE OU IA) ---
+        // --- CAS 2 : PREVIEW D'UN EXERCICE COMPLET ---
         if (isset($_GET['preview_exercise'])) {
             $ex_id = intval($_GET['preview_exercise']);
             $table = $wpdb->prefix . 'zb_exercises';
             $exercise = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $ex_id));
 
             if ($exercise) {
-                // On décode l'objet global
-                $exercise_obj = json_decode($exercise->exercise_data, true);
-                $questions = $exercise_obj['questions'] ?? [];
-                $meta = $exercise_obj['metadata'] ?? [];
-
-                // Détection de la source pour le badge
-                $is_archive = ($exercise->notion_id == 0);
-                $source_label = $is_archive ? "📄 ARCHIVE PDF" : "🤖 GÉNÉRATION IA";
-                $source_color = $is_archive ? "#8b5cf6" : "#10b981";
+                $questions = json_decode($exercise->exercise_data, true);
 
                 ob_start();
-                echo '<div class="zb-exercise-preview" style="max-width:900px; margin:20px auto; font-family: sans-serif;">';
+                echo '<div class="zb-exercise-preview" style="max-width:800px; margin:auto;">';
+                echo '<h1>' . esc_html($exercise->title) . '</h1>';
+                echo '<div class="zb-subject" style="background:#fff; padding:20px; border:1px solid #eee; border-radius:8px; margin-bottom:30px; box-shadow:0 2px 5px rgba(0,0,0,0.05);">';
 
-                // Header de l'exercice [cite: 2026-02-23]
-                echo '<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #eee; padding-bottom:15px; margin-bottom:20px;">';
-                echo '  <div>';
-                echo '      <span style="background:' . $source_color . '; color:#fff; padding:4px 10px; border-radius:12px; font-size:11px; font-weight:bold;">' . $source_label . '</span>';
-                echo '      <h1 style="margin:10px 0 5px 0; color:#1e293b;">' . esc_html($exercise->title) . '</h1>';
-                echo '      <small style="color:#64748b;">Origine : ' . esc_html($meta['origin'] ?? 'Inconnue') . ' | Réf : ' . esc_html($meta['file_reference'] ?? '-') . '</small>';
-                echo '  </div>';
-                echo '  <div style="text-align:right; background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #e2e8f0;">';
-                echo '      <span style="font-size:0.8em; color:#64748b;">Matière :</span><br><strong>' . esc_html($meta['matiere'] ?? 'Non spécifiée') . '</strong>';
-                echo '  </div>';
+                // Calcule le total des points de l'exercice
+                $total_points = array_sum(array_column($questions, 'points'));
+                echo '<div style="margin-bottom: 20px; text-align: right; font-weight: bold; color: #0ea5e9;">';
+                echo 'Score total de l\'exercice : ' . $total_points . ' points';
                 echo '</div>';
 
-                // Énoncé principal
-                echo '<div class="zb-subject" style="background:#fff; padding:25px; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:30px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">';
-                echo '  <h3 style="margin-top:0; color:#0f172a; border-left:4px solid ' . $source_color . '; padding-left:15px;">Énoncé du sujet</h3>';
-                echo    wpautop($exercise->subject_text);
+                echo wpautop($exercise->subject_text);
                 echo '</div>';
 
-                // Liste des questions
                 foreach ($questions as $i => $q) {
-                    echo '<div class="zb-q-item" style="margin-bottom:30px; padding:20px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0;">';
-                    echo '  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">';
-                    echo '      <strong style="color:#1e293b; font-size:1.1em;">Question ' . ($i + 1) . ' <small style="font-weight:normal; color:#64748b;">(' . ($q['type'] ?? 'single') . ')</small></strong>';
-                    echo '      <span style="background:#fff; padding:4px 12px; border-radius:20px; border:1px solid #cbd5e1; font-weight:bold; color:#0284c7;">' . intval($q['points'] ?? 1) . ' pts</span>';
-                    echo '  </div>';
-                    echo '  <p style="font-size:1.05em; color:#334155;">' . wpautop($q['question']) . '</p>';
+                    echo '<div class="zb-q-item" style="margin-bottom:40px; padding:20px; background:#fdfdfd; border-left:5px solid #0073aa; box-shadow:0 2px 4px rgba(0,0,0,0.05);">';
+                    echo '<h3 style="display: flex; justify-content: space-between; align-items: center;">';
+                    echo '<span>Question ' . ($i + 1) . ' <span style="font-size:0.7em; color:#666;">(' . esc_html($q['type'] ?? 'single') . ')</span></span>';
+                    echo '<span style="font-size:0.7em; background:#f1f5f9; padding:2px 8px; border-radius:5px; border:1px solid #e2e8f0;">' . intval($q['points'] ?? 1) . ' pts</span>';
+                    echo '</h3>';
+                    echo '<p>' . wpautop($q['question']) . '</p>';
 
-                    // Options A, B, C, D, E [cite: 2026-02-23]
-                    echo '  <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:20px 0;">';
+                    echo '<div class="zb-options-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
                     foreach ($q['options'] as $idx => $opt) {
-                        $is_correct = is_array($q['answer']) ? in_array($opt, $q['answer']) : ($opt === $q['answer']);
-                        $bg = $is_correct ? '#dcfce7' : '#fff';
-                        $border = $is_correct ? '#22c55e' : '#e2e8f0';
-                        echo '    <div style="padding:12px; border:2px solid ' . $border . '; background:' . $bg . '; border-radius:8px; font-size:0.95em;">';
-                        echo '      <strong style="color:#64748b;">' . chr(65 + $idx) . '.</strong> ' . esc_html($opt);
-                        if ($is_correct) echo ' <span style="float:right;">✅</span>';
-                        echo '    </div>';
-                    }
-                    echo '  </div>';
+                        // Logique de vérification de la réponse (string ou array)
+                        $is_correct = false;
+                        if (is_array($q['answer'])) {
+                            $is_correct = in_array($opt, $q['answer']);
+                        } else {
+                            $is_correct = ($opt === $q['answer']);
+                        }
 
-                    // Correction [cite: 2026-02-23]
-                    echo '  <div style="background:#f1f5f9; padding:15px; border-radius:6px; font-size:0.9em; color:#475569;">';
-                    echo '      <strong>Correction détaillée :</strong><br>' . wpautop($q['explanation']);
-                    echo '  </div>';
+                        $bg = $is_correct ? '#dcfce7' : '#fff';
+                        $border = $is_correct ? '#22c55e' : '#ddd';
+
+                        echo '<div style="padding:10px; border:1px solid ' . $border . '; background:' . $bg . '; border-radius:5px;">';
+                        echo '<strong>' . chr(65 + $idx) . '.</strong> ' . esc_html($opt);
+                        echo '</div>';
+                    }
+                    echo '</div>';
+
+                    echo '<div style="margin-top:15px; font-size:0.9em; color:#555; font-style:italic;">';
+                    echo '<strong>Correction :</strong> ' . wpautop($q['explanation']);
+                    echo '</div>';
                     echo '</div>';
                 }
                 echo '</div>';
@@ -378,16 +422,43 @@ class Zonebac_Admin_Controller
             ]);
         }
 
-        wp_enqueue_script('mathjax', 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js', [], null, true);
+        // --- CORRECTIF ERREUR 403 (NONCE) ---
+        wp_localize_script('zonebac-admin-js', 'zbData', [
+            'rest_url' => get_rest_url(),
+            'nonce'    => wp_create_nonce('zb_ingestion_nonce')
+        ]);
 
-        // Script de configuration MathJax
-        wp_add_inline_script('mathjax', "
+        // 3. MathJax (Chargement avec priorité haute)
+        wp_enqueue_script(
+            'mathjax-lib',
+            'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js',
+            [],
+            null,
+            false // On le charge dans le <head> pour être sûr qu'il soit prêt
+        );
+
+        // Configuration explicite AVANT le chargement du script
+        wp_add_inline_script('mathjax-lib', "
         window.MathJax = {
-            tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] },
-            svg: { fontCache: 'global' }
+                tex: {
+                    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+                    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+                },
+                options: {
+                    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+                },
+                startup: {
+                    pageReady: () => {
+                        console.log('ZB DEBUG: Bibliothèque MathJax chargée et prête.');
+                        return MathJax.startup.defaultPageReady();
+                    }
+                }
         };
-    ");
+        ", 'before');
     }
+
+
+
 
     public function add_admin_pages()
     {
@@ -409,11 +480,21 @@ class Zonebac_Admin_Controller
         // qui lit la table 'zb_questions' et affiche le LaTeX.
         include_once plugin_dir_path(__FILE__) . '../../admin/views/bank-page.php';
     }
+
     public function handle_save_settings()
     {
         check_admin_referer('zb_settings_verify');
-        $api_key = sanitize_text_field($_POST['deepseek_key']);
-        Zonebac_Settings_Model::save_settings(['deepseek_key' => $api_key]);
+        if (!current_user_can('manage_options')) wp_die('Accès refusé');
+
+        // On récupère les deux clés du formulaire [cite: 2025-11-16]
+        $data = [
+            'deepseek_key' => sanitize_text_field($_POST['deepseek_key']),
+            'gemini_key'   => sanitize_text_field($_POST['gemini_key'])
+        ];
+
+        // On envoie le tableau complet au modèle [cite: 2025-11-16]
+        Zonebac_Settings_Model::save_settings($data);
+
         wp_redirect(admin_url('admin.php?page=zonebac-lms&settings_updated=true'));
         exit;
     }
@@ -521,16 +602,11 @@ class Zonebac_Admin_Controller
 
     public function render_ex_bank_view()
     {
-        // 1. Charger la classe de la table si elle n'est pas déjà là
-        if (!class_exists('Zonebac_Exercise_Bank_Table')) {
-            require_once plugin_dir_path(__FILE__) . '../controllers/class-exercise-bank-table.php';
-        }
+        // Chargement de la table
+        require_once plugin_dir_path(__FILE__) . 'class-exercise-bank-table.php';
+        $ex_bank_table = new Zonebac_Exercise_Bank_Table();
 
-        // 2. Instancier la table AVANT d'inclure la vue
-        // C'est cette variable que la vue attend à la ligne 110
-        $bank_table = new Zonebac_Exercise_Bank_Table();
-
-        // 3. Inclure la vue
+        // Inclusion de la vue que nous avons créée précédemment
         include_once plugin_dir_path(__FILE__) . '../../admin/views/exercise-bank-page.php';
     }
 
@@ -674,15 +750,17 @@ class Zonebac_Admin_Controller
         check_admin_referer('zb_run_dispatch_nonce');
         if (!current_user_can('manage_options')) wp_die('Accès refusé');
 
-        // On force l'exécution du chef d'orchestre global qui gère Gaps ET Ingestion
-        $lms = new ZonebacLMS();
-        $lms->run_global_smart_dispatch();
+        require_once plugin_dir_path(__FILE__) . 'class-smart-engine.php';
+        Zonebac_Smart_Engine::run_auto_dispatcher();
 
+        // On force la redirection avec l'ancre #smart-mode pour éviter la page blanche [cite: 2025-11-16]
         wp_redirect(add_query_arg([
             'page'         => 'zonebac-ex-gen',
-            'message'      => 'success',
-            'message_type' => 'updated'
+            'message'      => 'success', // Ce code sera traduit par la vue
+            'message_type' => 'updated' // 'updated' donne la couleur verte de WordPress
         ], admin_url('admin.php')) . '#smart-mode');
         exit;
+        // wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&message=success#smart-mode'));
+        // exit;
     }
 }

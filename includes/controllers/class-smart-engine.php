@@ -170,95 +170,275 @@ class Zonebac_Smart_Engine
         }
     }
 
-    /**
-     * Orchestre le découpage d'un PDF en exercices distincts
-     */
-    public static function process_file_splitting($ingestion_id)
-    {
-        global $wpdb;
-        $table = $wpdb->prefix . 'zb_file_ingestion';
-        $file = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $ingestion_id));
 
-        if (!$file || !file_exists($file->file_path)) {
-            $wpdb->update($table, ['status' => 'failed'], ['id' => $ingestion_id]);
-            return;
+    public static function analyze_pdf_content_step_1($file_id)
+    {
+        $cache_key = 'zb_pdf_text_' . $file_id;
+        $cached_content = get_transient($cache_key);
+        if (false !== $cached_content) return $cached_content;
+
+        $file_path = get_attached_file($file_id);
+        if (!$file_path) {
+            global $wpdb;
+            $file_path = $wpdb->get_var($wpdb->prepare("SELECT file_path FROM {$wpdb->prefix}zb_file_ingestion WHERE id = %d", $file_id));
         }
 
-        $wpdb->update($table, ['status' => 'processing'], ['id' => $ingestion_id]);
+        $prompt = "Extraire tout le texte brut au format Markdown avec LaTeX.";
+        $result = Zonebac_DeepSeek_API::call_deepseek_vision($file_path, $prompt);
 
-        // 1. Préparation du fichier pour l'IA (Vision)
-        $file_data = base64_encode(file_get_contents($file->file_path));
-        $mime_type = mime_content_type($file->file_path);
+        // Basculement intelligent vers Gemini si DeepSeek détecte un scan ou échoue
+        if (empty($result) || strpos($result, "image scannée") !== false || strpos($result, "Erreur") !== false) {
+            error_log("ZB DEBUG: DeepSeek insuffisant, basculement vers Gemini Vision pour le fichier: " . $file_path);
 
-        // 2. Prompt de découpage visuel intelligent [cite: 2025-11-16]
-        $prompt = "Tu es un expert en numérisation d'archives pédagogiques de %s. 
-        Analyse visuellement ce document (Origine : %s).
-        
-        MISSIONS :
-        1. Identifie chaque exercice distinct présent sur les pages.
-        2. Extrais le texte intégral de chaque exercice avec une précision chirurgicale.
-        3. Ignore absolument les ratures, ronds, ou notes écrites à la main par des élèves.
-        4. Ignore les publicités ou en-têtes de l'époque.
-        
-        RÉPONDS EXCLUSIVEMENT en JSON : {\"exercices\": [\"Texte exercice 1\", \"Texte exercice 2\"]}";
+            if (file_exists($file_path)) {
+                // CRITIQUE : Lire le contenu réel et l'encoder en Base64
+                $file_binary = file_get_contents($file_path);
+                $base64_data = base64_encode($file_binary);
 
-        $params = [
-            'prompt' => sprintf($prompt, $file->origin_info, $file->origin_info),
-            'file_data' => $file_data,
-            'mime_type' => $mime_type
-        ];
-
-        // On appelle une nouvelle méthode Vision que nous allons créer
-        $response = Zonebac_DeepSeek_API::call_deepseek_vision($params);
-
-        if ($response) {
-            $data = json_decode(preg_replace('/^```json|```$/m', '', $response), true);
-            if (!empty($data['exercices'])) {
-                foreach ($data['exercices'] as $raw_ex) {
-                    self::create_extraction_job($file->id, $raw_ex, $file->matiere_id, $file->origin_info, $file->file_name);
-                }
-                $wpdb->update($table, [
-                    'status' => 'completed',
-                    'total_exercises_found' => count($data['exercices'])
-                ], ['id' => $ingestion_id]);
+                $result = Zonebac_Gemini_API::call_gemini_vision($base64_data, $prompt);
+            } else {
+                $result = "Erreur : Fichier introuvable sur le serveur.";
             }
-        } else {
-            $wpdb->update($table, ['status' => 'failed'], ['id' => $ingestion_id]);
         }
+
+        if ($result && strpos($result, 'Erreur') === false) {
+            set_transient($cache_key, $result, DAY_IN_SECONDS);
+        }
+        return $result;
+    }
+    public static function identify_sections_and_notions($extracted_text)
+    {
+        $all_notions = get_posts(['post_type' => 'notion', 'numberposts' => -1, 'post_status' => 'publish']);
+        $notions_ref = implode(', ', wp_list_pluck($all_notions, 'post_title'));
+
+        $prompt = "Tu es un expert en épreuves de Baccalauréat. 
+            Découpe l'épreuve suivante en utilisant EXACTEMENT ces balises pour séparer les exercices.
+            
+            Format attendu :
+            [SECTION_START]
+            TITLE: Titre de l'exercice
+            NOTIONS: Nom de la Notion 1, Notion 2
+            CONTENT: Texte intégral de l'exercice
+            [SECTION_END]
+
+            RÉFÉRENTIEL DES NOTIONS : [$notions_ref]
+
+            TEXTE À ANALYSER :
+            " . $extracted_text;
+
+        $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt);
+
+        // PARSING PHP ROBUSTE (Étape 3.2/3.3) [cite: 2025-11-16]
+        $sections = [];
+        // On cherche les blocs [SECTION_START] ... [SECTION_END] de manière insensible à la casse [cite: 2025-11-16]
+        preg_match_all('/\[SECTION_START\](.*?)\[SECTION_END\]/si', $response, $matches);
+
+        foreach ($matches[1] as $block) {
+            // Extraction avec support multi-lignes et espaces [cite: 2025-11-16]
+            preg_match('/TITLE:\s*(.*?)\n/i', $block, $title);
+            preg_match('/NOTIONS:\s*(.*?)\n/i', $block, $notions);
+            preg_match('/CONTENT:\s*(.*)/si', $block, $content);
+
+            $sections[] = [
+                'title'   => trim($title[1] ?? 'Exercice'),
+                'notions' => array_map('trim', explode(',', $notions[1] ?? '')),
+                'content' => trim($content[1] ?? '')
+            ];
+        }
+
+        // Si aucune section n'est trouvée, on logue pour voir ce que l'IA a vraiment répondu [cite: 2025-11-16]
+        if (empty($sections)) {
+            error_log("Zonebac Debug: Aucune section trouvée dans la réponse IA: " . $response);
+        }
+
+        return json_encode(['sections' => $sections]);
+    }
+    /**
+     * ÉTAPE 3.4 : FORMATAGE LATEX EXPERT (COMPLET)
+     */
+    public static function format_latex_content($text)
+    {
+        $prompt = "Tu es un expert en édition scientifique et typographie mathématique pour le Baccalauréat.
+        Ton rôle est de transformer TOUTES les expressions mathématiques du texte fourni en format LaTeX strict en utilisant les délimiteurs $...$.
+
+        CONSIGNES DE SÉCURITÉ :
+        - Utilise impérativement le double antislash (\\\\) pour toutes les commandes LaTeX (ex: \\\\frac, \\\\sin, \\\\lim).
+        - Encapsule chaque entité mathématique (variable seule, symbole ou formule complexe) entre $.
+
+        RÉFÉRENTIEL DES FONCTIONS À COUVRIR :
+        1. Standards : \\\\sin, \\\\cos, \\\\tan, \\\\arcsin, \\\\arccos, \\\\arctan, \\\\sinh, \\\\cosh, \\\\tanh.
+        2. Log/Exp : \\\\ln, \\\\log, \\\\exp.
+        3. Opérateurs : \\\\lim, \\\\lim_{x \\\\to \\\\infty}, \\\\max, \\\\min, \\\\sup, \\\\inf, \\\\det, \\\\dim.
+        4. Calcul : \\\\sqrt{x}, \\\\sqrt[n]{x}, \\\\frac{a}{b}, \\\\binom{n}{k}.
+        5. Sommes/Intégrales : \\\\sum, \\\\prod, \\\\int, \\\\iint, \\\\oint (avec bornes si présentes).
+        6. Vecteurs/Styles : \\\\vec{u}, \\\\overrightarrow{AB}, \\\\mathbb{R}, \\\\mathcal{C}.
+        7. Accents : \\\\hat, \\\\bar, \\\\tilde, \\\\overline.
+        8. Parenthèses dynamiques : \\\\left( ... \\\\right), \\\\left[ ... \\\\right].
+        9. Matrices : Utilise les environnements \\\\begin{pmatrix} ... \\\\end{pmatrix}.
+
+        CONTRAINTES DE SORTIE :
+        - Ne modifie pas le texte littéraire (le français).
+        - Ne réponds QUE par le texte formaté, sans aucune introduction ni conclusion.
+
+        Texte à traiter :
+        " . $text;
+
+        return Zonebac_DeepSeek_API::call_deepseek_raw($prompt);
     }
 
-    private static function create_extraction_job($ingestion_id, $raw_text, $matiere_id, $origin, $file_ref)
+    public static function identify_sections_only($extracted_text)
     {
-        global $wpdb;
-        $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
-            'notion_id' => 0, // 0 indique que c'est une extraction externe
-            'status'    => 'pending',
-            'params'    => json_encode([
-                'mode'           => 'extraction',
-                'raw_content'    => $raw_text,
-                'matiere_id'     => $matiere_id,
-                'origin'         => $origin,
-                'file_reference' => $file_ref
-            ]),
-            'created_at' => current_time('mysql')
-        ]);
+        if (empty($extracted_text)) return [];
+
+        $prompt = "Tu es un expert en édition pédagogique. Ta mission est de découper l'épreuve en sections et de NETTOYER le contenu.
+        CONSIGNES DE NETTOYAGE (CRITIQUE) :
+        1. SUPPRESSION : Élimine systématiquement les numéros de page (ex: 1/3, 2/3).
+        2. FILTRAGE : Supprime les mentions publicitaires, les noms de sites web (ex: 'Fomesoutra.com', 'ça soutra !'), et les en-têtes d'école ou de lycée qui se répètent.
+        3. TEXTE PUR : Ne garde que l'énoncé de l'exercice, les questions et les données mathématiques/scientifiques.
+        4. LATEX : Préserve absolument toutes les formules LaTeX intactes.
+
+        TEXTE BRUT :
+        $extracted_text
+        
+        FORMAT JSON STRICT :
+        {
+        \"sections\": [
+            { \"title\": \"Exercice X\", \"content\": \"Contenu nettoyé sans fioritures...\" }
+        ]
+        }";
+
+        $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt, true);
+
+        // Ton code de nettoyage par substr que nous avons ajouté précédemment
+        $start_pos = strpos($response, '{');
+        $end_pos = strrpos($response, '}');
+        if ($start_pos !== false && $end_pos !== false) {
+            $response = substr($response, $start_pos, ($end_pos - $start_pos) + 1);
+        }
+
+        $data = json_decode($response, true);
+        return $data['sections'] ?? [];
     }
 
-    public static function run_ingestion_dispatcher()
+    public static function match_notions_to_sections($sections_html)
     {
-        global $wpdb;
-        $table = $wpdb->prefix . 'zb_file_ingestion';
+        if (empty($sections_html) || strpos($sections_html, 'Erreur') !== false) return $sections_html;
 
-        // Sécurité : On vérifie le Toggle ON/OFF
-        $settings = Zonebac_Settings_Model::get_settings();
-        if (($settings['enable_smart_dispatcher'] ?? 'no') !== 'yes') return;
+        $all_notions = get_posts(['post_type' => 'notion', 'numberposts' => -1, 'post_status' => 'publish']);
+        $notions_list = implode(', ', wp_list_pluck($all_notions, 'post_title'));
 
-        // Récupérer le plus vieux fichier en attente
-        $file = $wpdb->get_row("SELECT * FROM $table WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1");
+        $prompt = "Tu es un expert pédagogique. Voici des exercices de mathématiques issus d'un scan.
+        Associe chaque exercice à la notion la plus pertinente de cette liste : [$notions_list].
+        
+        CONSIGNES DE SORTIE :
+        - Réponds UNIQUEMENT par un tableau HTML <table> stylisé avec des classes WordPress (widefat striped).
+        - Ne mets AUCUNE balise Markdown comme ```html.
+        - Si une notion n'est pas dans la liste, suggère la plus proche.
+        
+        CONTENU À ANALYSER :
+        " . strip_tags($sections_html); // On nettoie le HTML pour ne pas saturer le prompt
 
-        if ($file) {
-            error_log("ZONEBAC: Début du découpage pour " . $file->file_name);
-            self::process_file_splitting($file->id);
+        $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt, false);
+
+        // Nettoyage de sécurité au cas où l'IA n'aurait pas obéi
+        return preg_replace('/^```html|```$/m', '', $response);
+    }
+
+    /**
+     * ÉTAPE 4 : GÉNÉRATION DES MÉTA-DONNÉES PÉDAGOGIQUES
+     * Analyse une section et produit un JSON riche incluant le résumé et les questions transformées.
+     */
+    public static function generate_question_metadata($section_text, $notion_name, $doc_type = 'Bac')
+    {
+        $prompt = "Tu es un concepteur pédagogique expert pour le Baccalauréat. 
+            Analyse l'exercice suivant (Type : $doc_type) portant sur la notion : '$notion_name'.
+            
+            MISSIONS CRITIQUES :
+            1. JSON STRICT : Ta réponse doit être un JSON pur et valide. Ne mets aucun texte avant ou après.
+            2. RÉSUMÉ : Rédige un court paragraphe (2 lignes max) sur l'objectif pédagogique.
+            3. QUESTIONS : Pour chaque question, crée un item de quiz. Transforme les questions ouvertes en questions de validation.
+            4. AUCUN CHAMP VIDE : Ne laisse jamais les champs 'options' ou 'explanation' vides. Si une question est une démonstration, crée 4 options représentant des étapes logiques ou des résultats possibles.
+            5. ÉCHAPPEMENT LATEX : Utilise impérativement le format $...$ (inline) et $$...$$ (bloc). 
+            IMPORTANT : Utilise le double antislash (\\\\) pour TOUTES les commandes LaTeX (ex: \\\\frac, \\\\ln, \\\\mathbb) pour ne pas corrompre le JSON.
+
+            TEXTE DE L'EXERCICE :
+            $section_text
+
+            FORMAT JSON ATTENDU :
+            {
+                \"summary\": \"Objectif pédagogique ici...\",
+                \"questions\": [
+                    {
+                        \"question\": \"Énoncé précis avec LaTeX\",
+                        \"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"],
+                        \"answer\": \"La bonne réponse exacte (doit figurer dans les options)\",
+                        \"explanation\": \"Démonstration pédagogique complète avec LaTeX\",
+                        \"difficulty\": \"Moyen\",
+                        \"points\": 3
+                    }
+                ]
+            }";
+
+        // On force l'IA à répondre avec un objet JSON
+        $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt, true);
+
+        if (!$response) return null;
+
+        // Nettoyage rigoureux des balises markdown si présentes
+        $json_clean = preg_replace('/^```json|```$/m', '', $response);
+        $data = json_decode(trim($json_clean), true);
+
+        // Debug : si le JSON est invalide, on logue l'erreur pour analyse
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log("ZB DEBUG: Erreur JSON JSON_ERROR_" . json_last_error() . " sur le fichier ID.");
+            return null;
         }
+
+        return $data;
+    }
+
+    /**
+     * Flux : Identification des sections -> Composition de nouveaux exercices
+     */
+    public static function process_full_pedagogy($sections_array, $doc_type = 'Bac')
+    {
+        $final_data = [];
+        $api = new Zonebac_DeepSeek_API();
+
+        foreach ($sections_array as $index => $content) {
+            // 1. On demande à l'IA d'identifier la notion (Plus simple et plus fiable)
+            $prompt_notion = "Quelle est la notion mathématique principale de ce texte ? Réponds uniquement par son nom. Texte : " . substr($content, 0, 500);
+            $notion_found = Zonebac_DeepSeek_API::call_deepseek_raw($prompt_notion, false);
+
+            // 2. Paramètres de composition
+            $params = [
+                'pdf_source_content'    => $content,
+                'count'                 => 10,
+                'notion'                => trim($notion_found),
+                'classe'                => 'Terminale S',
+                'matiere'               => 'Mathématiques',
+                'chapitre'              => 'Limites en un point',
+                'notion'                => trim($notion_found),
+                'f'                     => 30,
+                'm'                     => 40,
+                'd'                     => 30
+            ];
+
+            // 3. Composition du nouvel exercice inspiré
+            $generated_json = $api->generate_exercise_batch($params);
+            $metadata = json_decode($generated_json, true);
+
+            if ($metadata) {
+                $final_data[] = [
+                    'id'       => $index + 1,
+                    'notion'   => trim($notion_found),
+                    'type'     => $doc_type,
+                    'raw_text' => $content, // On garde l'original pour la mémoire
+                    'metadata' => $metadata // Contient l'exercice composé (Titre, Sujet, 10 questions)
+                ];
+            }
+        }
+
+        return $final_data;
     }
 }

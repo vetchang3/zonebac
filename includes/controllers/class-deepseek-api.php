@@ -4,12 +4,13 @@ class Zonebac_DeepSeek_API
 {
     private $api_url = 'https://api.deepseek.com/v1/chat/completions';
 
+    /**
+     * Génère un lot de questions classiques (Usage standard)
+     */
     public function generate_questions_batch($params)
     {
         $api_key = Zonebac_Settings_Model::get_api_key();
-        if (empty($api_key)) {
-            return false;
-        }
+        if (empty($api_key)) return false;
 
         $prompt = $this->build_expert_prompt($params);
 
@@ -31,22 +32,9 @@ class Zonebac_DeepSeek_API
             'sslverify' => false
         ]);
 
-        if (is_wp_error($response)) {
-            error_log("ZONEBAC API ERROR: " . $response->get_error_message());
-            return false;
-        }
+        if (is_wp_error($response)) return false;
 
         $body = wp_remote_retrieve_body($response);
-        $status = wp_remote_retrieve_response_code($response);
-
-        if ($status !== 200) {
-            error_log("ZONEBAC API STATUS ERROR ($status): " . $body);
-            return false;
-        }
-
-        // Log de la réponse pour voir si le JSON est valide
-        error_log("ZONEBAC DEBUG: Réponse brute reçue de DeepSeek.");
-
         $data = json_decode($body, true);
         return $data['choices'][0]['message']['content'] ?? null;
     }
@@ -57,6 +45,7 @@ class Zonebac_DeepSeek_API
         $p['f'] = $p['f'] ?? 30;
         $p['m'] = $p['m'] ?? 40;
         $p['d'] = $p['d'] ?? 30;
+        $p['count'] = $p['count'] ?? 10;
 
         // Utilisation de sprintf pour une injection propre des variables
         // %s = string, %d = integer
@@ -122,9 +111,8 @@ class Zonebac_DeepSeek_API
         $api_key = Zonebac_Settings_Model::get_api_key();
         if (empty($api_key)) return false;
 
-        $prompt = (isset($params['mode']) && $params['mode'] === 'extraction')
-            ? $this->build_transformation_prompt($params)
-            : $this->build_exercise_prompt($params);
+        // Appel du nouveau prompt de composition inspirée [cite: 2025-11-16]
+        $prompt = $this->build_exercise_prompt($params);
 
         $response = wp_remote_post($this->api_url, [
             'headers' => [
@@ -150,22 +138,28 @@ class Zonebac_DeepSeek_API
         $data = json_decode($body, true);
         return $data['choices'][0]['message']['content'] ?? null;
     }
-
     private function build_exercise_prompt($p)
     {
+        // Sécurisation forcée des clés pour éviter le PHP Warning et l'échec du sprintf
+        $p['classe']   = !empty($p['classe'])   ? $p['classe']   : 'Terminale';
+        $p['matiere']  = !empty($p['matiere'])  ? $p['matiere']  : 'Général';
+        $p['chapitre'] = !empty($p['chapitre']) ? $p['chapitre'] : 'Limites';
+        $p['notion']   = !empty($p['notion'])   ? $p['notion']   : 'Limites en un point';
+        $p['count']    = !empty($p['count'])    ? $p['count']    : 10;
+        $p['f'] = isset($p['f']) ? $p['f'] : 30;
+        $p['m'] = isset($p['m']) ? $p['m'] : 40;
+        $p['d'] = isset($p['d']) ? $p['d'] : 30;
+
         $context_instruction = "";
         if (!empty($p['extra_notions'])) {
             $notions_list = implode(', ', $p['extra_notions']);
             $context_instruction = "IMPORTANT : Il s'agit d'un exercice de SYNTHÈSE. Tu DOIS obligatoirement créer des ponts logiques et progressifs avec les notions suivantes : $notions_list.";
+        } elseif (!empty($p['pdf_source_content'])) {
+            $context_instruction =  "IMPORTANT : Inspire toi de l'exercice suivant pour créer un nouvel execice SIMILAIRE :\n" . $p['pdf_source_content'];
         } else {
             $context_instruction = "Focus : Concentre l'exercice exclusivement sur l'exploration approfondie de la notion principale.";
         }
 
-        $context_instruction = "";
-        if (!empty($p['extra_notions'])) {
-            $notions_list = implode(', ', $p['extra_notions']);
-            $context_instruction = "IMPORTANT : Il s'agit d'un exercice de SYNTHÈSE. Tu DOIS obligatoirement créer des ponts logiques avec : $notions_list.";
-        }
 
         $template = "Tu es un concepteur d'examens expert pour le programme du Baccalauréat. 
         Génère un EXERCICE complet pour :
@@ -200,155 +194,121 @@ class Zonebac_DeepSeek_API
         - IMAGES : Si la question nécessite un schéma ou un graphique, remplis 'image_suggestion' avec une description détaillée. Sinon, laisse vide.
 
 
-        \"FORMAT JSON ATTENDU :
+        FORMAT JSON ATTENDU :
         {
             \"exercise_title\": \"Titre accrocheur du devoir\",
             \"subject_text\": \"Énoncé long de mise en situation...\",
-            \"metadata\": {
-                \"origin\": \"%s\", 
-                \"file_reference\": \"%s\",
-                \"matiere\": \"Nom de la matière\",
-                \"chapitres\": [\"Chapitre A\", \"Chapitre B\"],
-                \"notions_clés\": [\"Notion 1\", \"Notion 2\"],
-                \"competences_testees\": [\"Calcul\", \"Raisonnement\", \"Modélisation\"]
-            },
             \"questions\": [
               {
                 \"type\": \"single\" | \"multi\",
                 \"question\": \"Énoncé lié au sujet\",
-                \"points\": %d,
+                \"points\": 1 | 3 | 5, -- (1 pour Facile, 3 pour Moyen, 5 pour Difficile)
                 \"options\": [\"A\", \"B\", \"C\", \"D\"], -- (5 options si multi, ajout option E)
                 \"answer\": \"Texte exact\" | [\"Rép 1\", \"Rép 2\"] -- (1 réponse exacte si single, 2 si multi),
-                \"explanation\": \"Explication pédagogique complète, précise et détaillée avec LaTeX\",
+                \"explanation\": \"Explication pédagogique complète, preécise et détaillée avec LaTeX\",
                 \"difficulty\": \"Facile\" | \"Moyen\" | \"Difficile\",
-                \"image_suggestion\": \"Description si besoin\"
+                \"image_suggestion\": \"Générer une image de description si besoin\"
               }
             ]
-        }\";
-        ";
+        }";
 
-
-        return sprintf(
+        $fomattedExercice =  sprintf(
             $template,
             $p['classe'],
             $p['matiere'],
             $p['chapitre'],
             $p['notion'],
-            $context_instruction,
             $p['count'],
             $p['f'],
             $p['m'],
-            $p['d'],
-            $p['origin'],
-            $p['file_reference'],
-            $p['f'] // Exemple pour les points
+            $p['d']
         );
+        error_log("ZB DEBUG: build_exercise_prompt " . $fomattedExercice);
+
+        return $fomattedExercice;
     }
 
-    /**
-     * Appel brut à l'API pour les analyses de mapping (STATIQUE)
-     */
-    public static function call_deepseek_raw($prompt)
+    public static function call_deepseek_raw($prompt, $force_json = false)
     {
-        error_log("Zonebac Debug: Envoi du prompt à DeepSeek...");
-
         $settings = Zonebac_Settings_Model::get_settings();
         $api_key  = $settings['deepseek_key'] ?? '';
-
         if (empty($api_key)) return false;
+
+        $body_params = [
+            'model' => 'deepseek-chat',
+            'messages' => [
+                ['role' => 'system', 'content' => 'Tu es un expert en pédagogie.'],
+                ['role' => 'user', 'content' => $prompt]
+            ],
+            'temperature' => 0.3 // Plus bas pour plus de précision sur le découpage
+        ];
+
+        // On n'active le JSON que si demandé explicitement
+        if ($force_json) {
+            $body_params['response_format'] = ['type' => 'json_object'];
+        }
 
         $response = wp_remote_post('https://api.deepseek.com/v1/chat/completions', [
             'headers' => [
                 'Authorization' => 'Bearer ' . $api_key,
                 'Content-Type'  => 'application/json'
             ],
-            'timeout' => 30,
-            'body'    => json_encode([
-                'model' => 'deepseek-chat',
-                'messages' => [
-                    ['role' => 'system', 'content' => 'Tu es un expert en pédagogie mathématique du Baccalauréat.'],
-                    ['role' => 'user', 'content' => $prompt]
-                ],
-                'response_format' => ['type' => 'json_object']
-            ])
+            'timeout' => 120, // Important pour les textes longs
+            'body'    => json_encode($body_params),
+            'sslverify' => false
         ]);
 
-        if (is_wp_error($response)) {
-            error_log("Zonebac API Error: " . $response->get_error_message());
-            return false;
-        }
-        error_log("Zonebac Debug: Réponse reçue de l'IA.");
-
+        if (is_wp_error($response)) return false;
         $body = json_decode(wp_remote_retrieve_body($response), true);
         return $body['choices'][0]['message']['content'] ?? false;
     }
 
-    private function build_transformation_prompt($p)
-    {
-        $template = "Tu es un expert en pédagogie spécialisé en %s. 
-        MISSION : Transforme l'exercice brut suivant en un exercice interactif structuré (QCM).
-        
-        ORIGINE : %s
-        RÉFÉRENCE : %s
-        
-        CONTENU BRUT DE L'EXERCICE :
-        %s
-
-        CONSIGNES DE RÉDACTION :
-        1. Fidélité : Garde l'énoncé scientifique exact. Si des notations LaTeX sont présentes, assure-toi qu'elles sont parfaites.
-        2. Création de QCM : Pour chaque question de l'énoncé original, crée 5 options (A, B, C, D, E). 
-        - Une seule réponse doit être correcte (Type single).
-        - Les 4 autres (distracteurs) doivent être des erreurs classiques d'élèves.
-        3. Explication : Rédige une correction détaillée, étape par étape, pour chaque question.
-        4. Métadonnées : Identifie les chapitres et les notions de %s concernées.
-
-        FORMAT JSON STRICT :
-        {
-            \"exercise_title\": \"Titre extrait ou déduit\",
-            \"subject_text\": \"L'énoncé complet nettoyé\",
-            \"metadata\": {
-                \"origin\": \"%s\",
-                \"file_reference\": \"%s\",
-                \"matiere\": \"%s\",
-                \"chapitres\": [],
-                \"notions_clés\": [],
-                \"competences_testees\": []
-            },
-            \"questions\": [
-            {
-                \"type\": \"single\",
-                \"question\": \"...\",
-                \"points\": 3,
-                \"options\": [\"A\", \"B\", \"C\", \"D\", \"E\"],
-                \"answer\": \"La bonne réponse exacte\",
-                \"explanation\": \"Explication détaillée en LaTeX\",
-                \"difficulty\": \"Moyen\"
-            }
-            ]
-        }";
-
-        return sprintf(
-            $template,
-            $p['matiere'],
-            $p['origin'],
-            $p['file_reference'],
-            $p['raw_content'],
-            $p['matiere'],
-            $p['origin'],
-            $p['file_reference'],
-            $p['matiere']
-        );
-    }
-    public static function call_deepseek_vision($params)
+    public static function call_deepseek_vision($file_path, $prompt)
     {
         $settings = Zonebac_Settings_Model::get_settings();
         $api_key  = $settings['deepseek_key'] ?? '';
 
-        // Note d'expert : DeepSeek-Chat ne supporte pas nativement les images. 
-        // Pour un test immédiat "Wahou", utilise Gemini 1.5 Flash ou Pro.
-        // Voici la structure pour envoyer le binaire à une API multi-modale :
-        return self::call_deepseek_raw(
-            $params['prompt'] . "\n[CONTENU DU FICHIER EN BASE64 : " . substr($params['file_data'], 0, 100) . "...]"
-        );
+        // 1. Extraction du texte brute du PDF en PHP
+        require_once(plugin_dir_path(__FILE__) . '../../vendor/autoload.php');
+        $parser = new \Smalot\PdfParser\Parser();
+
+        try {
+            $pdf = $parser->parseFile($file_path);
+            $extracted_text = $pdf->getText();
+
+            // Sécurité : si le texte est trop court, c'est probablement un scan image
+            if (strlen(trim($extracted_text)) < 50) {
+                return "Erreur : Ce PDF semble être une image scannée sans couche de texte. L'IA ne peut pas le lire sans modèle de vision.";
+            }
+        } catch (\Exception $e) {
+            return "Erreur lors de la lecture locale du PDF : " . $e->getMessage();
+        }
+
+        // 2. Envoi du texte brut au modèle deepseek-chat (le seul disponible)
+        $payload = [
+            'model' => 'deepseek-chat',
+            'messages' => [
+                ['role' => 'system', 'content' => 'Tu es un expert en extraction de texte. Ton rôle est de nettoyer et structurer le texte brut issu d\'un PDF de Baccalauréat.'],
+                ['role' => 'user', 'content' => $prompt . "\n\nVoici le texte extrait du document :\n" . $extracted_text]
+            ],
+            'temperature' => 0.1
+        ];
+
+        $response = wp_remote_post('https://api.deepseek.com/v1/chat/completions', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type'  => 'application/json'
+            ],
+            'timeout' => 90,
+            'body'    => json_encode($payload),
+            'sslverify' => false
+        ]);
+
+        if (is_wp_error($response)) return "Erreur WP : " . $response->get_error_message();
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        return $data['choices'][0]['message']['content'] ?? "Erreur de réponse : " . $body;
     }
 }

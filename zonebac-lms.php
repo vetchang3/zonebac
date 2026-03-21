@@ -20,13 +20,13 @@ require_once plugin_dir_path(__FILE__) . 'includes/controllers/trait-generator-f
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-admin-controller.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-import-controller.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-deepseek-api.php';
+require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-gemini-api.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-generator.php';
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-question-meta-box.php';
 new Zonebac_Question_Meta_Box();
 
 require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-exercise-generator.php';
-require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-smart-engine.php';
-require_once __DIR__ . '/vendor/autoload.php';
+require_once plugin_dir_path(__FILE__) . 'includes/controllers/class-smart-engine.php'; // AJOUTE CETTE LIGNE ICI
 
 class ZonebacLMS
 {
@@ -59,16 +59,38 @@ class ZonebacLMS
         if (!wp_next_scheduled('zb_smart_cron_hook')) {
             wp_schedule_event(time(), 'hourly', 'zb_smart_cron_hook');
         }
-        add_action('zb_smart_cron_hook', [$this, 'run_global_smart_dispatch']);
+        // Correction ici : On pointe vers la classe Engine statique
+        add_action('zb_smart_cron_hook', ['Zonebac_Smart_Engine', 'run_auto_dispatcher']);
     }
-
-    public function run_global_smart_dispatch()
+    public static function run_auto_dispatcher()
     {
-        // 1. Analyse des Gaps et création de jobs (Logique existante)
-        Zonebac_Smart_Engine::run_auto_dispatcher();
+        global $wpdb;
 
-        // 2. Traitement des fichiers PDF/Doc en attente (Nouvelle logique)
-        Zonebac_Smart_Engine::run_ingestion_dispatcher();
+        // 1. Récupérer tous les plannings actifs
+        $schedules = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}zb_smart_schedules");
+
+        foreach ($schedules as $sched) {
+            // 2. Analyser les notions de cette matière
+            $priorities = Zonebac_Smart_Engine::get_priority_notions($sched->matiere_id, $sched->threshold_n);
+
+
+            if (!empty($priorities)) {
+                // 3. Prendre la notion avec le Gap le plus élevé
+                $top_priority = $priorities[0];
+
+                if ($top_priority['gap'] > 0) {
+                    // 4. Créer un job de génération automatique
+                    $wpdb->insert($wpdb->prefix . 'zb_exercise_jobs', [
+                        'notion_id'  => $top_priority['id'],
+                        'count'      => 10, // On avance par lot de 10 pour la stabilité [cite: 2025-11-16]
+                        'status'     => 'pending',
+                        'created_at' => current_time('mysql')
+                    ]);
+
+                    error_log("Zonebac Smart: Job auto créé pour la notion " . $top_priority['name']);
+                }
+            }
+        }
     }
 
     public function dispatch_next_job()
