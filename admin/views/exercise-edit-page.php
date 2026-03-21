@@ -22,11 +22,11 @@
 
                 <div class="card" style="margin-top: 20px;">
                     <h3>Question <?php echo ($i + 1); ?> ...</h3>
-                    
+
                     <p>
                         <strong>Points :</strong>
                         <input type="number" name="questions[<?php echo $i; ?>][points]" value="<?php echo esc_attr($q['points'] ?? 1); ?>" style="width:60px">
-                        <span class="description">(Facile: 1, Moyen: 3, Difficile: 5)</span>
+                        <span class="description">(Facile: 1, Moyen: 2, Difficile: 3)</span>
                     </p>
                 </div>
 

@@ -32,6 +32,7 @@ class Zonebac_Admin_Controller
         add_action('admin_post_zb_handle_file_ingestion', [$this, 'handle_file_ingestion']);
         add_action('wp_ajax_zb_debug_analyze_step_1', [$this, 'ajax_analyze_step_1']);
         add_action('wp_ajax_zb_generate_single_exercise', [$this, 'ajax_generate_single_exercise']);
+        add_action('wp_ajax_zb_get_exercise_preview', [$this, 'ajax_get_exercise_preview']);
 
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
@@ -850,5 +851,24 @@ class Zonebac_Admin_Controller
         ]);
 
         return new WP_REST_Response(['success' => true, 'points' => $composed['total_calculated_points']], 200);
+    }
+
+    public function ajax_get_exercise_preview()
+    {
+        check_ajax_referer('zb_preview_nonce', 'nonce');
+        if (!current_user_can('manage_options')) wp_die();
+
+        global $wpdb;
+        $id = intval($_POST['id']);
+        $exercise = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}zb_exercises WHERE id = %d", $id));
+
+        if ($exercise) {
+            // On réutilise ta logique de rendu de prévisualisation existante
+            $_GET['preview_exercise'] = $id;
+            echo $this->render_question_preview_front('');
+        } else {
+            echo "Exercice introuvable.";
+        }
+        wp_die();
     }
 }

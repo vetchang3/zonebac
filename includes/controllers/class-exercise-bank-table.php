@@ -74,19 +74,16 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
 
     public function column_title($item)
     {
-        // L'URL doit passer l'action et l'ID de l'exercice
-        $edit_url = admin_url('admin.php?page=zonebac-ex-gen&action=edit_exercise&exercise_id=' . $item['id']);
+        // Bouton Modifier : On pointe vers la page d'édition dédiée
+        $edit_url = admin_url('admin.php?page=zonebac-ex-edit&id=' . $item['id']);
 
         $actions = [
+            'view'   => sprintf('<a href="#" class="zb-view-exercise" data-id="%d">Voir</a>', $item['id']),
             'edit'   => sprintf('<a href="%s">Modifier</a>', $edit_url),
-            'delete' => sprintf('<a href="?page=%s&action=delete&id=%d" onclick="return confirm(\'Supprimer ?\')">Supprimer</a>', $_REQUEST['page'], $item['id']),
+            'delete' => sprintf('<a href="?page=%s&action=delete&id=%d" onclick="return confirm(\'Supprimer définitivement cet exercice ?\')">Supprimer</a>', $_REQUEST['page'], $item['id']),
         ];
 
-        return sprintf(
-            '<strong>%1$s</strong> %2$s',
-            esc_html($item['title']),
-            $this->row_actions($actions)
-        );
+        return sprintf('<strong>%1$s</strong> %2$s', esc_html($item['title']), $this->row_actions($actions));
     }
 
     public function column_q_count($item)
@@ -126,7 +123,18 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         global $wpdb;
         $table = $wpdb->prefix . 'zb_exercises';
 
-        // Suppression
+        // --- DÉBUT DU BLOC À AJOUTER : GESTION BULK DELETE ---
+        if ($this->current_action() === 'bulk-delete') {
+            // 'exercise' correspond au nom (name) donné dans column_cb()
+            $ids = isset($_REQUEST['exercise']) ? array_map('intval', $_REQUEST['exercise']) : [];
+            if (!empty($ids)) {
+                $wpdb->query("DELETE FROM $table WHERE id IN (" . implode(',', $ids) . ")");
+                echo '<div class="updated"><p>' . count($ids) . ' exercices supprimés avec succès.</p></div>';
+            }
+        }
+        // --- FIN DU BLOC À AJOUTER ---
+
+        // Suppression individuelle (déjà présente dans ton code)
         if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
             $wpdb->delete($table, ['id' => intval($_GET['id'])]);
         }
@@ -134,7 +142,7 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         $per_page = 20;
         $current_page = $this->get_pagenum();
 
-        // On compte TOUT [cite: 2026-03-21]
+        // On compte TOUT
         $total_items = $wpdb->get_var("SELECT COUNT(*) FROM $table");
 
         $this->set_pagination_args([
@@ -151,5 +159,10 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
         );
 
         $this->_column_headers = [$this->get_columns(), [], []];
+    }
+
+    public function get_bulk_actions()
+    {
+        return ['bulk-delete' => 'Supprimer définitivement'];
     }
 }

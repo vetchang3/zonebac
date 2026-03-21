@@ -489,10 +489,10 @@ class Zonebac_Smart_Engine
                 $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
                 $difficulty_counts[$diff]++;
 
-                // Barème expert : Facile=1, Moyen=3, Difficile=5 [cite: 2026-03-21]
+                // Barème expert : Facile=1, Moyen=2, Difficile=3 
                 if ($diff === 'Facile') $q['points'] = 1;
-                elseif ($diff === 'Difficile') $q['points'] = 5;
-                else $q['points'] = 3;
+                elseif ($diff === 'Difficile') $q['points'] = 3;
+                else $q['points'] = 2;
 
                 $total_score += $q['points'];
             }

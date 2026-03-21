@@ -129,7 +129,7 @@ class Zonebac_Exercise_Generator
                 $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
                 $difficulty_counts[$diff]++;
 
-                $p = ($diff === 'Facile') ? 1 : (($diff === 'Difficile') ? 5 : 3);
+                $p = ($diff === 'Facile') ? 1 : (($diff === 'Difficile') ? 3 : 2);
                 $q['points'] = $p;
                 $total_points += $p;
             }
