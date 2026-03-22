@@ -39,3 +39,27 @@
   height: 35px !important;
   padding: 0 !important;
 }
+/* État désactivé du bouton de génération */
+#submit-gen:disabled {
+    background: #cbd5e1 !important;
+    border-color: #cbd5e1 !important;
+    color: #64748b !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+}
+
+/* État actif avec effet de survol (Wahou) */
+#submit-gen:not(:disabled) {
+    background: #163A5E !important;
+    border-color: #163A5E !important;
+    color: #ffffff !important;
+    font-weight: bold;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#submit-gen:not(:disabled):hover {
+    background: #1e4d7d !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(22, 58, 94, 0.3);
+}

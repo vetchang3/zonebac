@@ -109,6 +109,9 @@ class ZonebacLMS
         // Priorité aux Exercices
         $next_ex = $wpdb->get_row("SELECT id, notion_id FROM {$wpdb->prefix}zb_exercise_jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1");
         if ($next_ex) {
+            // VERROUILLAGE IMMÉDIAT avant de planifier l'événement
+            $wpdb->update("{$wpdb->prefix}zb_exercise_jobs", ['status' => 'processing'], ['id' => $next_ex->id]);
+
             wp_schedule_single_event(time(), 'zb_async_exercise_event', [$next_ex->id, $next_ex->notion_id]);
             spawn_cron();
             return;

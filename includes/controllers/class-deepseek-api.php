@@ -212,7 +212,7 @@ class Zonebac_DeepSeek_API
             ]
         }";
 
-        $fomattedExercice =  sprintf(
+        return  sprintf(
             $template,
             $p['classe'],
             $p['matiere'],
@@ -223,9 +223,6 @@ class Zonebac_DeepSeek_API
             $p['m'],
             $p['d']
         );
-        error_log("ZB DEBUG: build_exercise_prompt " . $fomattedExercice);
-
-        return $fomattedExercice;
     }
 
     public static function call_deepseek_raw($prompt, $force_json = false)

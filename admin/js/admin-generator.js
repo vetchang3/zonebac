@@ -11,46 +11,83 @@
     };
     const btnSubmit = document.getElementById("submit-gen");
 
-    if (selects.classe) {
-    async function updateSelect(type, parentId, nextSelect, following = []) {
-      nextSelect.disabled = true;
-      nextSelect.innerHTML = "<option>Chargement...</option>";
-      following.forEach((s) => {
-        s.disabled = true;
-        s.innerHTML = '<option value="">-- Attente --</option>';
-      });
+    /**
+     * Vérifie si le bouton doit être activé
+     * La notion doit avoir une valeur numérique (ID) et non le texte par défaut
+     */
+    function validateFormState() {
+        if (!btnSubmit) return;
 
-      try {
-        const response = await fetch(
-          `${zbData.rest_url}zonebac/v1/get-hierarchy/?type=${type}&parent_id=${parentId}`,
-        );
-        const data = await response.json();
-        nextSelect.innerHTML = '<option value="">-- Sélectionner --</option>';
-        if (Array.isArray(data)) {
-          data.forEach((item) => {
-            nextSelect.innerHTML += `<option value="${item.id}">${item.name}</option>`;
-          });
-          nextSelect.disabled = false;
+        const notionValue = selects.notion ? selects.notion.value : "";
+        
+        // On active seulement si notionValue est un nombre (ID de la notion)
+        if (notionValue !== "" && !isNaN(notionValue)) {
+            btnSubmit.disabled = false;
+            btnSubmit.style.opacity = "1";
+            btnSubmit.style.cursor = "pointer";
+        } else {
+            btnSubmit.disabled = true;
+            btnSubmit.style.opacity = "0.5";
+            btnSubmit.style.cursor = "not-allowed";
         }
-      } catch (e) {
-          console.error("Zonebac Error:", e);
-      }
     }
 
-    selects.classe.addEventListener("change", () =>
-      updateSelect("matiere", selects.classe.value, selects.matiere, [
-        selects.chapitre,
-        selects.notion,
-      ]),
-    );
-    selects.matiere.addEventListener("change", () =>
-      updateSelect("chapitre", selects.matiere.value, selects.chapitre, [
-        selects.notion,
-      ]),
-    );
-    selects.chapitre.addEventListener("change", () =>
-      updateSelect("notion", selects.chapitre.value, selects.notion),
-    );
+    if (selects.classe) {
+        // FORCE l'état désactivé au chargement initial
+        validateFormState();
+
+        async function updateSelect(type, parentId, nextSelect, following = []) {
+            nextSelect.disabled = true;
+            nextSelect.innerHTML = "<option>Chargement...</option>";
+            
+            following.forEach((s) => {
+                s.disabled = true;
+                s.innerHTML = '<option value="">-- Attente --</option>';
+            });
+
+            // On invalide le bouton dès qu'un parent change
+            validateFormState();
+
+            try {
+                const response = await fetch(
+                    `${zbData.rest_url}zonebac/v1/get-hierarchy/?type=${type}&parent_id=${parentId}`,
+                );
+                const data = await response.json();
+                
+                nextSelect.innerHTML = '<option value="">-- Sélectionner --</option>';
+                
+                if (Array.isArray(data)) {
+                    data.forEach((item) => {
+                        nextSelect.innerHTML += `<option value="${item.id}">${item.name}</option>`;
+                    });
+                    nextSelect.disabled = false;
+                }
+            } catch (e) {
+                console.error("Zonebac Error:", e);
+            }
+            
+            // Re-vérification après mise à jour (au cas où)
+            validateFormState();
+        }
+
+        // Écouteurs sur les changements de hiérarchie
+        selects.classe.addEventListener("change", () =>
+            updateSelect("matiere", selects.classe.value, selects.matiere, [
+                selects.chapitre,
+                selects.notion,
+            ]),
+        );
+        selects.matiere.addEventListener("change", () =>
+            updateSelect("chapitre", selects.matiere.value, selects.chapitre, [
+                selects.notion,
+            ]),
+        );
+        selects.chapitre.addEventListener("change", () =>
+            updateSelect("notion", selects.chapitre.value, selects.notion),
+        );
+        
+        // Écouteur crucial sur la Notion elle-même
+        selects.notion.addEventListener("change", validateFormState);
     }
 
     // 2. Gestion du bouton d'analyse IA (Optimisé pour retour immédiat)

@@ -37,8 +37,6 @@ class Zonebac_Exercise_Generator
 
         if ($inserted) {
             $job_id = $wpdb->insert_id;
-            // On lance le traitement immédiatement (similaire aux questions)
-            wp_schedule_single_event(time(), 'zb_async_exercise_event', [$job_id, $notion_id]);
 
             $lms = new ZonebacLMS();
             $lms->dispatch_next_job();
