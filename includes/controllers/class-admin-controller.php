@@ -42,51 +42,56 @@ class Zonebac_Admin_Controller
 
     public function ajax_generate_single_exercise()
     {
-        // 1. Vérification de sécurité
         check_ajax_referer('zb_ingestion_nonce', 'nonce');
         if (!current_user_can('manage_options')) wp_send_json_error("Accès refusé.");
 
         global $wpdb;
 
-        // CORRECTION : On utilise 'section_index' pour correspondre au JS
-        $section_index = isset($_POST['section_index']) ? intval($_POST['section_index']) : (isset($_POST['section_id']) ? intval($_POST['section_id']) : 0);
-        $file_id = intval($_POST['file_id']);
+        // 1. Correction de la récupération des IDs
+        // Le JS envoie 'section_id', qui correspond à l'ID UNIQUE dans la table zb_pdf_sections
+        $section_id = isset($_POST['section_id']) ? intval($_POST['section_id']) : 0;
+        $file_id    = intval($_POST['file_id']);
 
-        // 2. Récupération de la section
+        if (!$section_id) wp_send_json_error("ID de section manquant.");
+
+        // 2. Récupération précise de la section par son ID unique
         $section = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}zb_pdf_sections WHERE file_id = %d LIMIT %d, 1",
-            $file_id,
-            $section_index
+            "SELECT * FROM {$wpdb->prefix}zb_pdf_sections WHERE id = %d AND file_id = %d",
+            $section_id,
+            $file_id
         ), ARRAY_A);
 
-        if (!$section) wp_send_json_error("Section introuvable en base (Index: $section_index).");
+        if (!$section) wp_send_json_error("Section introuvable en base (ID: $section_id).");
 
-        // 3. Composition IA
+        // 3. Composition IA (On passe bien le $file_id pour les métadonnées) [cite: 2025-11-16]
         $composed = Zonebac_Smart_Engine::compose_inspired_exercise([
-            'title' => $section['section_title'],
+            'title'   => $section['section_title'],
             'content' => $section['raw_content']
-        ]);
+        ], $file_id);
 
-        if (!$composed) wp_send_json_error("L'IA n'a pas pu composer l'exercice.");
+        // Si l'IA échoue, c'est ici que l'erreur est renvoyée au JS
+        if (!$composed || !isset($composed['questions'])) {
+            wp_send_json_error("L'IA n'a pas pu composer l'exercice. Vérifiez vos clés API ou le format JSON de DeepSeek.");
+        }
 
-        // 4. Sauvegarde avec Notion ID = 0 pour l'ingestion
+        // 4. Sauvegarde
         $wpdb->insert($wpdb->prefix . 'zb_exercises', [
-            'notion_id'      => 0, // Crucial pour l'ingestion [cite: 2026-03-21]
+            'notion_id'      => 0,
             'title'          => $composed['exercise_title'] ?? $section['section_title'],
             'subject_text'   => $composed['subject_text'],
             'exercise_data'  => json_encode($composed['questions'], JSON_UNESCAPED_UNICODE),
-            'total_points'   => $composed['total_calculated_points'],
+            'total_points'   => $composed['total_calculated_points'] ?? 0,
             'origin_file_id' => $file_id,
             'difficulty'     => $composed['global_difficulty'] ?? 'Moyen'
         ]);
 
         $new_id = $wpdb->insert_id;
         $preview_url = admin_url('admin.php?page=zonebac-ex-gen&preview_exercise=' . $new_id);
+
         wp_send_json_success([
             'points' => $composed['total_calculated_points'],
             'url'    => $preview_url,
-            'message' => "Exercice de " . $composed['total_calculated_points'] . " points créé !",
-            'id'      => $new_id
+            'id'     => $new_id
         ]);
     }
 
@@ -99,25 +104,32 @@ class Zonebac_Admin_Controller
         global $wpdb;
         $table_sections = $wpdb->prefix . 'zb_pdf_sections';
 
-        // 1. TENTATIVE DE RÉCUPÉRATION DEPUIS LA BD (Économie d'IA) [cite: 2026-03-21]
-        $existing_sections = $wpdb->get_results($wpdb->prepare(
-            "SELECT section_title as title, raw_content as content FROM $table_sections WHERE file_id = %d",
+        // 1. TENTATIVE DE RÉCUPÉRATION DEPUIS LA BD [cite: 2026-03-21]
+        $sections = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, section_title as title, raw_content as content FROM $table_sections WHERE file_id = %d",
             $file_id
         ), ARRAY_A);
 
-        if (!empty($existing_sections)) {
-            error_log("ZB DEBUG: Récupération des sections depuis la base de données pour le fichier $file_id");
-            $sections = $existing_sections;
-        } else {
+        if (empty($sections)) {
             // 2. SI VIDE : LANCEMENT DU FLUX IA COMPLET [cite: 2026-03-21]
             error_log("ZB DEBUG: Aucune donnée en BD. Lancement de l'extraction IA...");
             $raw_text = Zonebac_Smart_Engine::analyze_pdf_content_step_1($file_id);
 
-            // On passe le file_id pour que la fonction sauvegarde automatiquement [cite: 2026-03-21]
-            $sections = Zonebac_Smart_Engine::identify_sections_only($raw_text, $file_id);
+            // Cette fonction insère en BD mais retourne un tableau sans les nouveaux IDs [cite: 2025-11-16]
+            Zonebac_Smart_Engine::identify_sections_only($raw_text, $file_id);
+
+            // ÉTAPE CRUCIALE : On recharge les données depuis la BD pour obtenir les IDs réels [cite: 2026-03-21]
+            $sections = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, section_title as title, raw_content as content FROM $table_sections WHERE file_id = %d",
+                $file_id
+            ), ARRAY_A);
         }
 
-        // 3. AFFICHAGE DU RENDU (On réutilise ton HTML Navy/Wahou) [cite: 2025-11-16]
+        if (empty($sections)) {
+            wp_send_json_error("L'IA n'a détecté aucune section dans ce document.");
+        }
+
+        // 3. AFFICHAGE DU RENDU (Utilisation sécurisée de $sec['id']) [cite: 2025-11-16]
         ob_start();
 ?>
         <div class="zb-preview-container" style="background: #0f172a; padding: 25px; border-radius: 12px;">
@@ -127,12 +139,12 @@ class Zonebac_Admin_Controller
             </h2>
 
             <div class="zb-sections-grid" style="display: grid; gap: 20px; margin-top: 20px;">
-                <?php foreach ($sections as $index => $sec) : ?>
+                <?php foreach ($sections as $sec) : ?>
                     <div class="zb-section-card" style="background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow: hidden;">
                         <div style="background: #334155; padding: 10px 20px; color: #38bdf8; font-weight: bold; display: flex; justify-content: space-between;">
                             <span><?php echo esc_html($sec['title']); ?></span>
                             <button class="button button-primary btn-generate-ex"
-                                data-section-id="<?php echo $index; ?>"
+                                data-section-id="<?php echo esc_attr($sec['id']); ?>"
                                 style="background: #10b981; border: none; font-size: 11px;">
                                 Générer 10 Questions
                             </button>
@@ -158,19 +170,21 @@ class Zonebac_Admin_Controller
             wp_die('Accès refusé');
         }
 
-        // Récupération des tableaux de métadonnées
+        // Récupération des tableaux de métadonnées envoyés par le formulaire [cite: 2025-11-16]
         $origins     = $_POST['file_origins'] ?? [];
         $matiere_ids = $_POST['file_matiere_ids'] ?? [];
+        $classe_ids  = $_POST['file_classe_ids'] ?? []; // RÉCUPÉRATION DE LA CLASSE [cite: 2025-11-16]
+        $types       = $_POST['file_types'] ?? [];
         $files       = $_FILES['zb_archives'] ?? [];
 
         if (!empty($files['name'][0])) {
             require_once(ABSPATH . 'wp-admin/includes/file.php');
 
-            // On boucle sur chaque fichier [cite: 2025-11-16]
+            // On boucle sur chaque fichier pour un traitement individuel [cite: 2025-11-16]
             foreach ($files['name'] as $key => $name) {
                 if ($files['error'][$key] !== UPLOAD_ERR_OK) continue;
 
-                // Préparation des données spécifiques au fichier
+                // Préparation des données pour wp_handle_upload
                 $file_data = [
                     'name'     => $files['name'][$key],
                     'type'     => $files['type'][$key],
@@ -179,16 +193,16 @@ class Zonebac_Admin_Controller
                     'size'     => $files['size'][$key]
                 ];
 
-                // Upload physique via WordPress
                 $upload = wp_handle_upload($file_data, ['test_form' => false]);
 
                 if ($upload && !isset($upload['error'])) {
-                    // Insertion en base de données avec sa matière spécifique
+                    // INSERTION DYNAMIQUE (Utilisation de classe_id) [cite: 2026-03-21]
                     $wpdb->insert($wpdb->prefix . 'zb_file_ingestion', [
                         'file_name'   => $name,
                         'file_path'   => $upload['file'],
                         'matiere_id'  => intval($matiere_ids[$key]),
-                        'origin_info' => sanitize_text_field($origins[$key]),
+                        'classe_id'   => intval($classe_ids[$key]), // SAUVEGARDE DE LA CLASSE [cite: 2026-03-21]
+                        'origin_info' => sanitize_text_field($origins[$key] . ' - ' .  ($types[$key] ?? 'Bac')),
                         'status'      => 'pending',
                         'created_at'  => current_time('mysql')
                     ]);
@@ -196,11 +210,10 @@ class Zonebac_Admin_Controller
             }
         }
 
-        // Redirection avec ancre pour rester sur l'onglet Ingestion
+        // Redirection vers l'onglet Ingestion avec l'ancre active
         wp_redirect(admin_url('admin.php?page=zonebac-ex-gen&success=1#ingestion-mode'));
         exit;
     }
-
     public static function auto_map_new_notion($post_id, $post, $update)
     {
         // On ne mappe que si c'est une publication réelle (pas un brouillon/auto-save)

@@ -451,7 +451,7 @@
     </div>
 
     <div id="ingestion-mode" class="zb-tab-content">
-        <div class="card" style="border-left: 4px solid #8b5cf6; padding: 25px; border-radius: 12px; background: #fff; max-width: 800px;">
+        <div class="card" style="border-left: 4px solid #8b5cf6; padding: 25px; border-radius: 12px; background: #fff; max-width: 100%;">
             <h3><span class="dashicons dashicons-upload"></span> Ingestion massive d'épreuves (Archives)</h3>
             <p class="description" style="margin-bottom: 20px;">Déposez vos fichiers PDF. Vous pourrez ensuite spécifier l'origine et la matière pour chaque document avant l'analyse.</p>
 
@@ -474,7 +474,7 @@
 
                 <?php submit_button('Lancer l\'upload et l\'analyse', 'button-primary', 'submit', true, [
                     'id' => 'zb_submit_ingestion',
-                    'style' => 'background:#8b5cf6; border-color:#7c3aed; display:none;'
+                    'style' => 'background:#8b5cf6; border-color:#7c3aed; display:none; width:100%;'
                 ]); ?>
             </form>
         </div>
@@ -629,26 +629,109 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // --- PARTIE 1 : GESTION DES ONGLETS (RESTORED) ---
         const tabs = document.querySelectorAll('.nav-tab');
         const contents = document.querySelectorAll('.zb-tab-content');
 
-        function switchTab(targetId) {
-            tabs.forEach(tab => tab.classList.remove('nav-tab-active'));
-            contents.forEach(content => content.classList.remove('active'));
-            const activeTab = document.querySelector(`[href="${targetId}"]`);
-            const activeContent = document.querySelector(targetId);
-            if (activeTab && activeContent) {
-                activeTab.classList.add('nav-tab-active');
-                activeContent.classList.add('active');
-            }
+        function switchTab(hash) {
+            const id = hash || '#manual-mode';
+            tabs.forEach(tab => {
+                tab.classList.toggle('nav-tab-active', tab.getAttribute('href') === id);
+            });
+            contents.forEach(content => {
+                content.style.display = ('#' + content.id === id) ? 'block' : 'none';
+            });
         }
+
         tabs.forEach(tab => {
             tab.addEventListener('click', function(e) {
                 e.preventDefault();
-                switchTab(this.getAttribute('href'));
-                history.pushState(null, null, this.getAttribute('href'));
+                const hash = this.getAttribute('href');
+                window.location.hash = hash;
+                switchTab(hash);
             });
         });
-        switchTab(window.location.hash || '#smart-mode');
+
+        // Initialisation au chargement (pour les liens directs ou retours page)
+        if (window.location.hash) {
+            switchTab(window.location.hash);
+        } else {
+            switchTab('#manual-mode');
+        }
+
+        // --- PARTIE 2 : CONFIGURATION DYNAMIQUE DES DOCUMENTS ---
+        const fileInput = document.getElementById('zb_multi_file_input');
+        const container = document.getElementById('zb_files_container');
+        const metaList = document.getElementById('zb_file_meta_list');
+        const submitBtn = document.getElementById('zb_submit_ingestion');
+        const countDisplay = document.getElementById('file_count_display');
+
+        const classesOptions = `<?php
+                                $classes = get_terms(['taxonomy' => 'classe', 'hide_empty' => false]);
+                                foreach ($classes as $c) echo '<option value="' . $c->term_id . '">' . esc_js($c->name) . '</option>';
+                                ?>`;
+
+        const matieresOptions = `<?php
+                                    $matieres = get_terms(['taxonomy' => 'matiere', 'hide_empty' => false]);
+                                    foreach ($matieres as $m) echo '<option value="' . $m->term_id . '">' . esc_js($m->name) . '</option>';
+                                    ?>`;
+
+        if (fileInput) {
+            fileInput.addEventListener('change', function() {
+                container.innerHTML = '';
+                const files = Array.from(this.files);
+
+                if (files.length > 0) {
+                    metaList.style.display = 'block';
+                    submitBtn.style.display = 'block';
+                    countDisplay.innerText = files.length + " fichier(s) prêt(s) à l'envoi";
+
+                    files.forEach((file, index) => {
+                        const fileNameClean = file.name.replace(/\.[^/.]+$/, "");
+                        const row = document.createElement('div');
+                        row.className = 'zb-file-row';
+
+                        // Style de ligne Flexbox (alignement horizontal total)
+                        row.style = "display: flex; align-items: center; justify-content:建设-between; gap: 15px; background: #fff; padding: 12px 20px; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 10px; width: 100%; box-sizing: border-box;";
+
+                        row.innerHTML = `
+        <div style="flex: 2; min-width: 200px; font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <span class="dashicons dashicons-pdf" style="color:#ef4444; margin-right:5px; vertical-align: middle;"></span> ${file.name}
+        </div>
+
+        <div style="flex: 1.5;">
+            <input type="text" name="file_origins[]" value="${fileNameClean}" placeholder="Source" style="width: 100%; margin: 0; height: 32px;">
+        </div>
+
+        <div style="flex: 1;">
+            <select name="file_types[]" style="width: 100%; margin: 0; height: 32px;">
+                <option value="Bac">Baccalauréat</option>
+                <option value="Devoir">Devoir de classe</option>
+            </select>
+        </div>
+
+        <div style="flex: 1;">
+            <select name="file_classe_ids[]" style="width: 100%; margin: 0; height: 32px;" required>
+                <option value="">-- Classe --</option>
+                ${classesOptions}
+            </select>
+        </div>
+
+        <div style="flex: 1;">
+            <select name="file_matiere_ids[]" style="width: 100%; margin: 0; height: 32px;" required>
+                <option value="">-- Matière --</option>
+                ${matieresOptions}
+            </select>
+        </div>
+
+        <div style="flex: 0 0 60px; text-align: right;">
+             <span style="background: #dcfce7; color: #166534; padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: bold; border: 1px solid #166534;">PRÊT</span>
+        </div>
+    `;
+                        container.appendChild(row);
+                    });
+                }
+            });
+        }
     });
 </script>

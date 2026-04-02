@@ -141,20 +141,34 @@ class Zonebac_DB_Manager
     public static function migrate_tables()
     {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'zb_exercises';
 
-        // Liste des colonnes à vérifier [cite: 2026-03-21]
-        $columns_to_add = [
+        // 1. MIGRATION DE LA TABLE DES EXERCICES (zb_exercises)
+        $table_ex = $wpdb->prefix . 'zb_exercises';
+        $cols_ex = [
             'total_points'   => "ADD COLUMN total_points int(11) DEFAULT 0 AFTER exercise_data",
             'difficulty'     => "ADD COLUMN difficulty varchar(50) DEFAULT 'Moyen' AFTER total_points",
             'origin_file_id' => "ADD COLUMN origin_file_id bigint(20) DEFAULT NULL AFTER difficulty"
         ];
 
-        foreach ($columns_to_add as $col_name => $sql_part) {
-            $exists = $wpdb->get_results($wpdb->prepare("SHOW COLUMNS FROM $table_name LIKE %s", $col_name));
+        foreach ($cols_ex as $col_name => $sql_part) {
+            $exists = $wpdb->get_results($wpdb->prepare("SHOW COLUMNS FROM $table_ex LIKE %s", $col_name));
             if (empty($exists)) {
-                $wpdb->query("ALTER TABLE $table_name $sql_part");
-                error_log("ZB DEBUG: Colonne $col_name ajoutée avec succès.");
+                $wpdb->query("ALTER TABLE $table_ex $sql_part");
+                error_log("ZB DEBUG: Table Exercises - Colonne $col_name ajoutée.");
+            }
+        }
+
+        // 2. MIGRATION DE LA TABLE D'INGESTION (zb_file_ingestion)
+        $table_ingest = $wpdb->prefix . 'zb_file_ingestion';
+        $cols_ingest = [
+            'classe_id' => "ADD COLUMN classe_id bigint(20) DEFAULT NULL AFTER matiere_id"
+        ];
+
+        foreach ($cols_ingest as $col_name => $sql_part) {
+            $exists = $wpdb->get_results($wpdb->prepare("SHOW COLUMNS FROM $table_ingest LIKE %s", $col_name));
+            if (empty($exists)) {
+                $wpdb->query("ALTER TABLE $table_ingest $sql_part");
+                error_log("ZB DEBUG: Table Ingestion - Colonne $col_name ajoutée.");
             }
         }
     }

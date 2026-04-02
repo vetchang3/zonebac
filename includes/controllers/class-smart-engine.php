@@ -10,8 +10,6 @@ class Zonebac_Smart_Engine
     public static function get_priority_notions($matiere_id, $threshold_n = 50)
     {
         global $wpdb;
-
-        // Appel de la méthode statique de liaison
         $notions = self::get_all_notions_by_matiere($matiere_id);
         $priority_list = [];
 
@@ -45,22 +43,16 @@ class Zonebac_Smart_Engine
      */
     public static function run_auto_dispatcher()
     {
-        // Récupération des réglages
         $settings = Zonebac_Settings_Model::get_settings();
 
-        // Si l'interrupteur n'est pas activé, on arrête tout immédiatement [cite: 2025-11-16]
         if (empty($settings['enable_smart_dispatcher']) || $settings['enable_smart_dispatcher'] !== 'yes') {
-            // error_log("Zonebac: Dispatcher ignoré (Mode OFF)"); 
             return;
         }
 
-
         global $wpdb;
-
         $schedules = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}zb_smart_schedules");
 
         foreach ($schedules as $sched) {
-            // APPEL DIRECT SANS "NEW"
             $priorities = self::get_priority_notions($sched->matiere_id, $sched->threshold_n);
 
             if (!empty($priorities)) {
@@ -83,8 +75,6 @@ class Zonebac_Smart_Engine
     private static function get_all_notions_by_matiere($matiere_id)
     {
         global $wpdb;
-
-        // Utilisation de la clé validée par le diagnostic
         $chapitre_ids = $wpdb->get_col($wpdb->prepare(
             "SELECT term_id FROM {$wpdb->termmeta} WHERE meta_key = 'parent_id' AND meta_value = %d",
             $matiere_id
@@ -462,47 +452,144 @@ class Zonebac_Smart_Engine
         return $final_data;
     }
 
-    public static function compose_inspired_exercise($section_data)
+    /**
+     * GÉNÉRATEUR D'EXERCICE INSPIRÉ (Architecture 1x10 avec Mutation Abstraite)
+     */
+    public static function compose_inspired_exercise($section_data, $file_id = 0)
     {
+        global $wpdb;
         $api = new Zonebac_DeepSeek_API();
 
-        // 15 questions pour un "Problème", 10 sinon [cite: 2026-03-21]
-        $is_probleme = (stripos($section_data['title'], 'Problème') !== false);
-        $count = $is_probleme ? 15 : 10;
+        // 1. Métadonnées
+        $meta = ($file_id > 0) ? $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}zb_file_ingestion WHERE id = %d", $file_id)) : null;
+        $classe_name  = $meta ? get_term($meta->classe_id, 'classe')->name : 'Terminale';
+        $matiere_name = $meta ? get_term($meta->matiere_id, 'matiere')->name : 'Mathématiques';
+        $doc_type     = $meta->origin_info ?? 'Baccalauréat';
+        $matiere_id   = $meta ? intval($meta->matiere_id) : 0;
 
-        $params = [
-            'pdf_source_content' => $section_data['content'],
-            'count'    => $count,
-            'classe'   => 'Terminale',
-            'matiere'  => 'Mathématiques',
-            'spirit'   => 'Baccalauréat / Devoir de classe',
-        ];
-
-        $generated_json = $api->generate_exercise_batch($params);
-        $data = json_decode($generated_json, true);
-
-        if ($data && isset($data['questions'])) {
-            $total_score = 0;
-            $difficulty_counts = ['Facile' => 0, 'Moyen' => 0, 'Difficile' => 0];
-
-            foreach ($data['questions'] as &$q) {
-                $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
-                $difficulty_counts[$diff]++;
-
-                // Barème expert : Facile=1, Moyen=2, Difficile=3 
-                if ($diff === 'Facile') $q['points'] = 1;
-                elseif ($diff === 'Difficile') $q['points'] = 3;
-                else $q['points'] = 2;
-
-                $total_score += $q['points'];
+        // 2. Identification Chapitre/Notion (Réparation du Titre)
+        $chapitres_ref = "";
+        if ($matiere_id > 0) {
+            $terms = get_terms(['taxonomy' => 'chapitre', 'hide_empty' => false, 'meta_query' => [['key' => 'parent_id', 'value' => $matiere_id]]]);
+            if (!is_wp_error($terms) && !empty($terms)) {
+                $chapitres_ref = implode(', ', wp_list_pluck($terms, 'name'));
             }
-
-            // Détermination de la difficulté globale (la majorité l'emporte)
-            arsort($difficulty_counts);
-            $data['global_difficulty'] = key($difficulty_counts);
-            $data['total_calculated_points'] = $total_score;
         }
 
-        return $data;
+        $prompt_classify = "Analyse ce texte et identifie : 
+        1. Le CHAPITRE parmi : [$chapitres_ref] 
+        2. Une NOTION précise. Réponds en JSON : {\"chapitre\": \"...\", \"notion\": \"...\"} CONTENU : " . substr($section_data['content'], 0, 500);
+
+        error_log("===> Zonebac Debug prompt_classify: $prompt_classify");
+        $classif_raw = Zonebac_DeepSeek_API::call_deepseek_raw($prompt_classify, true);
+        $classif = json_decode(preg_replace('/^```json|```$/m', '', $classif_raw), true);
+
+        $real_notion   = $classif['notion'] ?? $section_data['title'];
+        $real_chapitre = $classif['chapitre'] ?? 'Général';
+
+        // 3. Extraction de l'essence (Mutation)
+        $prompt_essence = "Analyse l'extrait suivant : '{$section_data['content']}'.
+        MISSION : Extrais uniquement la structure intellectuelle de l'exercice pour permettre une mutation totale.
+        1. COMPÉTENCES : Quelles capacités sont testées ? (ex: analyse, calcul, synthèse, démonstration).
+        2. PILIERS CONCEPTUELS : Quels sont les concepts clés abordés ? (ex: événements historiques, lois physiques, propriétés logiques).
+        3. NIVEAU DE COMPLEXITÉ : Évalue la difficulté globale.
+
+        RÈGLE CRITIQUE : INTERDICTION FORMELLE de citer les données brutes (noms, dates, fonctions exactes, chiffres). Ne renvoie que le squelette pédagogique.";
+
+        error_log("===> Zonebac Debug prompt_essence: $prompt_essence");
+        $essence = Zonebac_DeepSeek_API::call_deepseek_raw($prompt_essence, false);
+
+        // 4. ÉTAPE A : SUJET (Innovation Totale)
+        $prompt_subject = "Tu es un expert pédagogique. Crée un énoncé de type examen du Baccalaureat pour $classe_name en $matiere_name.
+        STRUCTURE : $essence
+        RÈGLES : Ne recopie pas l'original. Inven-te une mise en situation et des fonctions g(x) ou h(x). Texte fluide, LaTeX $...$, pas de structure \section.";
+        error_log("===> Zonebac Debug prompt_subject: $prompt_subject");
+
+        $subject_text = Zonebac_DeepSeek_API::call_deepseek_raw($prompt_subject, false);
+        if (!$subject_text) return null;
+
+        $subject_text = preg_replace('/\\\\documentclass|\\\\begin\{document\}|\\\\section|\\\\begin\{enumerate\}|\\\\item/i', '', $subject_text);
+        $subject_text = trim(preg_replace('/^```html|```$/m', '', $subject_text));
+
+        error_log("===> Zonebac Debug subject_text: $subject_text");
+
+        // 5. ÉTAPE B : GÉNÉRATION UNITAIRE (1x10)
+        $all_questions = [];
+        $is_probleme = (stripos($section_data['title'], 'Problème') !== false);
+        $target_count = $is_probleme ? 15 : 10;
+
+        for ($i = 1; $i <= $target_count; $i++) {
+            $params = [
+                'subject_text' => $subject_text,
+                'original_pdf' => $essence, // On donne l'essence, pas le PDF brut !
+                'range'        => "Question $i",
+                'count'        => 1,
+                'previous_questions' => json_encode($all_questions)
+            ];
+
+            $json_q = $api->generate_inspired_batch($params);
+            $data_q = self::secure_json_parse($json_q);
+
+            if (!empty($data_q['questions'][0])) {
+                $q = $data_q['questions'][0];
+                // Calcul des points (Réparation du 0 pts)
+                $diff = ucfirst(strtolower($q['difficulty'] ?? 'Moyen'));
+                $q['points'] = ($diff === 'Facile') ? 1 : (($diff === 'Difficile') ? 3 : 2);
+                $all_questions[] = $q;
+            }
+        }
+
+        // 6. CALCULS FINAUX
+        if (empty($all_questions)) return null;
+
+        $total_score = 0;
+        $difficulty_counts = ['Facile' => 0, 'Moyen' => 0, 'Difficile' => 0];
+
+        foreach ($all_questions as $q) {
+            $diff = $q['difficulty'] ?? 'Moyen';
+            $difficulty_counts[$diff] = ($difficulty_counts[$diff] ?? 0) + 1;
+            $total_score += $q['points'];
+        }
+        arsort($difficulty_counts);
+
+        return [
+            'exercise_title' => "Synthèse : " . $real_notion,
+            'subject_text'   => $subject_text,
+            'questions'      => $all_questions,
+            'total_calculated_points' => $total_score,
+            'global_difficulty' => key($difficulty_counts)
+        ];
+    }
+
+    public static function summarize_exercise_content($raw_content, $matiere_name = 'Général')
+    {
+        $prompt = "Résume l'exercice suivant en extrayant uniquement : 
+        1. Le contexte Narratif 
+        2. Les fonctions ou variables mathématiques clés 
+        3. Les compétences testées. 
+        CONTENU : $raw_content";
+        return Zonebac_DeepSeek_API::call_deepseek_raw($prompt, false);
+    }
+
+    /**
+     * Nettoie et décode le JSON provenant de l'IA de manière sécurisée.
+     */
+    private static function secure_json_parse($generated_json)
+    {
+        if (empty($generated_json)) return [];
+        $clean = preg_replace('/^```json|```$/m', '', $generated_json);
+        $clean = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $clean);
+        $clean = preg_replace_callback('/"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/s', function ($matches) {
+            $text = str_replace(["\r\n", "\n", "\r", "\t"], "\\n", $matches[1]);
+            return '"' . preg_replace('/\s+/', ' ', $text) . '"';
+        }, $clean);
+        $clean = trim($clean);
+        $data = json_decode($clean, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $repair = rtrim($clean, ', ');
+            if (substr($repair, -1) !== '}') $repair .= ']}';
+            $data = json_decode($repair, true);
+        }
+        return is_array($data) ? $data : [];
     }
 }

@@ -96,23 +96,55 @@ class Zonebac_Exercise_Bank_Table extends WP_List_Table
     public function column_default($item, $column_name)
     {
         $notion_id = $item['notion_id'];
+        $file_meta = null;
+
+        // Si notion_id = 0, on cherche les infos dans le fichier d'origine
+        if ($notion_id == 0 && !empty($item['origin_file_id'])) {
+            global $wpdb;
+            $file_meta = $wpdb->get_row($wpdb->prepare(
+                "SELECT classe_id, matiere_id FROM {$wpdb->prefix}zb_file_ingestion WHERE id = %d",
+                $item['origin_file_id']
+            ));
+        }
+
         switch ($column_name) {
             case 'classe':
-                return ($notion_id > 0) ? $this->get_term_name($notion_id, 'classe') : '<span class="description">Extraite du PDF</span>';
+                if ($notion_id > 0) return $this->get_term_name($notion_id, 'classe');
+
+                // Sécurisation contre WP_Error
+                if (isset($file_meta->classe_id)) {
+                    $term = get_term($file_meta->classe_id, 'classe');
+                    return (!is_wp_error($term) && !empty($term)) ? $term->name : '-';
+                }
+                return '-';
+
             case 'matiere':
-                return ($notion_id > 0) ? $this->get_term_name($notion_id, 'matiere') : '<span class="description">Extraite du PDF</span>';
+                if ($notion_id > 0) return $this->get_term_name($notion_id, 'matiere');
+
+                // Sécurisation contre WP_Error
+                if (isset($file_meta->matiere_id)) {
+                    $term = get_term($file_meta->matiere_id, 'matiere');
+                    return (!is_wp_error($term) && !empty($term)) ? $term->name : '-';
+                }
+                return '-';
+
             case 'notion':
-                return ($notion_id > 0) ? get_the_title($notion_id) : '<em>Non classé (Ingestion)</em>';
+                return ($notion_id > 0) ? get_the_title($notion_id) : '<strong>' . esc_html($item['title']) . '</strong>';
+
             case 'date':
                 return date('d/m/Y H:i', strtotime($item['created_at']));
+
             case 'source':
-                return $this->column_source($item); // Appel explicite
+                return $this->column_source($item);
+
             case 'difficulty':
                 $colors = ['Facile' => '#22c55e', 'Moyen' => '#f59e0b', 'Difficile' => '#ef4444'];
                 $color = $colors[$item['difficulty']] ?? '#64748b';
                 return sprintf('<span style="color:%s; font-weight:bold;">%s</span>', $color, $item['difficulty']);
+
             case 'total_points':
                 return '<strong>' . $item['total_points'] . ' pts</strong>';
+
             default:
                 return '-';
         }

@@ -152,47 +152,56 @@
     });
 
    $(document).on('click', '.btn-generate-ex', function(e) {
-        e.preventDefault();
-        const $btn = $(this);
-        const sectionIndex = $btn.data('section-id'); 
-        const $card = $btn.closest('.zb-section-card');
-        
-        // On récupère l'ID du fichier depuis le bouton d'analyse principal
-        const fileId = $('.zb-btn-analyze').first().data('file-id'); 
+    e.preventDefault();
+    const $btn = $(this);
+    const sectionId = $btn.attr('data-section-id');
+    const $card = $btn.closest('.zb-section-card'); 
+    const fileId = $('.zb-btn-analyze').first().data('file-id'); 
 
-        // État visuel "Wahou" [cite: 2025-11-16]
-        $btn.prop('disabled', true).html('<span class="dashicons dashicons-update spin"></span> Composition...');
+    // ÉTAT INITIAL : "Wahou" [cite: 2025-11-16]
+    $btn.prop('disabled', true).html('<span class="dashicons dashicons-update spin"></span> Composition en cours...');
+    
+    // Comme le PHP est une boucle longue, on change juste le texte pour rassurer l'admin
+    let timer = 0;
+    const progressInterval = setInterval(() => {
+        timer++;
+        if(timer === 5) $btn.html('<span class="dashicons dashicons-update spin"></span> Analyse du sujet...');
+        if(timer === 15) $btn.html('<span class="dashicons dashicons-update spin"></span> Génération des questions (1/10)...');
+        if(timer === 40) $btn.html('<span class="dashicons dashicons-update spin"></span> Finalisation des explications...');
+    }, 1000);
 
-        $.ajax({
-            url: ajaxurl, // Utilisation de l'endpoint admin-ajax.php au lieu de REST
-            method: 'POST',
-            data: {
-                action: 'zb_generate_single_exercise', // Doit correspondre au hook PHP
-                section_id: sectionIndex,
-                file_id: fileId,
-                nonce: zbData.nonce // Le nonce généré par wp_localize_script
-            },
-            success: function(response) {
-                if (response.success) {
-                    $btn.replaceWith(
-                        '<div style="margin-top:10px;">' +
-                        '<span style="color:#10b981; font-weight:bold;">✅ ' + response.data.points + ' pts créés !</span><br>' +
-                        '<a href="' + response.data.url + '" target="_blank" class="button button-small" style="margin-top:5px; background:#0ea5e9; color:white; border:none;">👁️ Voir l\'exercice</a>' +
-                        '</div>'
-                    );
-                    $card.css('border-left', '5px solid #10b981');
-                } else {
-                    alert("Erreur : " + response.data);
-                    $btn.prop('disabled', false).text("Réessayer");
-                }
-            },
-            error: function(xhr) {
-                console.error("Erreur AJAX:", xhr.status, xhr.responseText);
-                alert("Erreur 403 : Problème de sécurité ou session expirée.");
+    $.ajax({
+        url: ajaxurl,
+        method: 'POST',
+        data: {
+            action: 'zb_generate_single_exercise', 
+            section_id: sectionId,
+            file_id: fileId,
+            nonce: zbData.nonce 
+        },
+        success: function(response) {
+            clearInterval(progressInterval);
+            if (response.success) {
+                $btn.replaceWith(
+                    '<div class="zb-generated-res" style="margin-top:10px;">' +
+                    '<span style="color:#10b981; font-weight:bold;">✅ ' + response.data.points + ' pts créés !</span><br>' +
+                    '<a href="' + response.data.url + '" target="_blank" class="button button-small" style="margin-top:5px; background:#0ea5e9; color:white; border:none;">👁️ Voir l\'exercice</a>' +
+                    '</div>'
+                );
+                $card.css('border-left', '5px solid #10b981');
+                if (window.MathJax) MathJax.typesetPromise();
+            } else {
+                alert("Erreur : " + response.data);
                 $btn.prop('disabled', false).text("Réessayer");
             }
-        });
+        },
+        error: function() {
+            clearInterval(progressInterval);
+            alert("Erreur 403 ou Timeout : Le serveur a mis trop de temps.");
+            $btn.prop('disabled', false).text("Réessayer");
+        }
     });
+});
 
 
   });
