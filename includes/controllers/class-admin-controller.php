@@ -33,10 +33,32 @@ class Zonebac_Admin_Controller
         add_action('wp_ajax_zb_debug_analyze_step_1', [$this, 'ajax_analyze_step_1']);
         add_action('wp_ajax_zb_generate_single_exercise', [$this, 'ajax_generate_single_exercise']);
         add_action('wp_ajax_zb_get_exercise_preview', [$this, 'ajax_get_exercise_preview']);
+        add_action('rest_api_init', [$this, 'handle_cors'], 15);
 
         add_filter('the_content', [$this, 'render_question_preview_front'], 999);
         add_filter('removable_query_args', function ($args) {
             return array_diff($args, array('zb_question_id'));
+        });
+    }
+
+    public function handle_cors()
+    {
+        remove_filter('rest_pre_serve_request', 'rest_send_cors_headers');
+        add_filter('rest_pre_serve_request', function ($value) {
+            $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+
+            // Utilisation de constant() pour éviter l'erreur 'Undefined constant' [cite: 2025-11-16]
+            $env_origins = defined('ZB_ALLOWED_ORIGINS') ? constant('ZB_ALLOWED_ORIGINS') : 'http://localhost:3000';
+            $allowed_origins = explode(',', $env_origins);
+
+            if (in_array($origin, $allowed_origins)) {
+                header('Access-Control-Allow-Origin: ' . $origin);
+            }
+
+            header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+            header('Access-Control-Allow-Credentials: true');
+            header('Access-Control-Allow-Headers: Authorization, Content-Type, X-ZoneBac-Key');
+            return $value;
         });
     }
 
@@ -606,6 +628,163 @@ class Zonebac_Admin_Controller
                 return current_user_can('manage_options'); // Sécurité d'expert 
             }
         ]);
+
+        register_rest_route('zonebac/v1', '/exercices', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_external_exercises'],
+            'permission_callback' => function ($request) {
+                $client_key = $request->get_header('X-ZoneBac-Key');
+
+                // On vérifie l'existence sans déclencher d'erreur fatale [cite: 2025-11-16]
+                $server_key = defined('ZONEBAC_API_KEY') ? constant('ZONEBAC_API_KEY') : null;
+
+                if (!$server_key) {
+                    error_log("ZONEBAC SECURITY ERROR: Clé manquante dans wp-config.php");
+                    return false;
+                }
+
+                return $client_key === $server_key;
+            }
+        ]);
+
+        register_rest_route('zonebac/v1', '/quick-quiz', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_quick_quiz_data'],
+            'permission_callback' => '__return_true' // À restreindre en prod [cite: 2026-04-05]
+        ]);
+
+        register_rest_route('zonebac/v1', '/filter-data', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_dynamic_filter_data'],
+            'permission_callback' => '__return_true' //
+        ]);
+    }
+
+    public function get_dynamic_filter_data($request)
+    {
+        $type = sanitize_text_field($request->get_param('type'));
+        $parent_id = intval($request->get_param('parent_id'));
+        $data = [];
+
+        // Mapping des types vers tes taxonomies réelles
+        $tax_map = [
+            'classes'   => 'classe',
+            'matieres'  => 'matiere',
+            'chapitres' => 'chapitre'
+        ];
+
+        if ($type === 'notions') {
+            $posts = get_posts([
+                'post_type' => 'notion',
+                'posts_per_page' => -1,
+                'tax_query' => [['taxonomy' => 'chapitre', 'field' => 'term_id', 'terms' => $parent_id]]
+            ]);
+            foreach ($posts as $p) $data[] = ['id' => (string)$p->ID, 'label' => $p->post_title];
+        } else {
+            $taxonomy = $tax_map[$type] ?? '';
+            if (!$taxonomy) return new WP_Error('error', 'Type inconnu');
+
+            $args = ['taxonomy' => $taxonomy, 'hide_empty' => false];
+            if ($parent_id > 0) {
+                $args['meta_query'] = [['key' => 'parent_id', 'value' => $parent_id]];
+            }
+
+            $terms = get_terms($args);
+            if (!is_wp_error($terms)) {
+                foreach ($terms as $t) $data[] = ['id' => (string)$t->term_id, 'label' => $t->name];
+            }
+        }
+        return new WP_REST_Response($data, 200);
+    }
+
+    public function get_quick_quiz_data()
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'zb_questions';
+
+        // On pioche 10 questions aléatoires pour le mode "Flash" [cite: 2025-11-16, 2026-04-05]
+        $results = $wpdb->get_results("SELECT question_data FROM $table ORDER BY RAND() LIMIT 10");
+
+        return array_map(function ($q) {
+            $data = json_decode($q->question_data, true);
+            return [
+                'text'        => $data['question'] ?? '',
+                'options'     => $data['options'] ?? [],
+                'correct'     => [array_search($data['answer'], $data['options'])], // Conversion index [cite: 2026-04-05]
+                'explanation' => $data['explanation'] ?? '',
+                'level'       => $data['difficulty'] ?? 'Moyen',
+                'point'       => 1
+            ];
+        }, $results);
+    }
+
+    public function get_external_exercises($request)
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'zb_exercises';
+
+        // 2. RÉCUPÉRATION DES FILTRES [cite: 2026-04-06]
+        $notion_id = intval($request->get_param('notion'));
+        $avg_score = $request->get_param('avg_score'); // On le garde tel quel pour tester le null [cite: 2026-04-06]
+
+        // 3. PARAMÈTRES DE PAGINATION (Crucial pour l'Infinite Scroll) [cite: 2026-04-06]
+        // Si per_page n'est pas fourni, on utilise 6 (comme dans ton page.tsx)
+        $per_page = $request->get_param('per_page') ? intval($request->get_param('per_page')) : 6;
+        $page     = $request->get_param('page') ? intval($request->get_param('page')) : 1;
+        $offset   = ($page - 1) * $per_page;
+
+        // 4. CONSTRUCTION DE LA REQUÊTE [cite: 2025-11-16]
+        $query = "SELECT * FROM $table WHERE 1=1";
+
+        if ($notion_id > 0) {
+            $query .= $wpdb->prepare(" AND notion_id = %d", $notion_id);
+        }
+
+        if ($avg_score !== null && $avg_score !== '') {
+            $query .= $wpdb->prepare(" AND total_points >= %d", intval($avg_score));
+        }
+
+        // 5. AJOUT DE LA LOGIQUE DE PAGINATION SQL [cite: 2025-11-16]
+        // On trie par ID décroissant pour avoir les nouveautés en premier [cite: 2026-04-06]
+        $sql = $query . $wpdb->prepare(" ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset);
+
+        $results = $wpdb->get_results($sql);
+
+        // 6. GESTION DES ERREURS SQL [cite: 2025-11-16]
+        if ($wpdb->last_error) {
+            error_log("ZB API ERROR - SQL : " . $wpdb->last_error);
+            return new WP_REST_Response(['error' => $wpdb->last_error], 500);
+        }
+
+        // 7. FORMATAGE POUR NEXT.JS [cite: 2026-04-05, 2026-04-06]
+        $formatted = [];
+        foreach ($results as $ex) {
+            error_log("ZB DEBUG - Envoi du sujet pour l'ID " . $ex->id . " : " . substr($ex->subject_text, 0, 50) . "...");
+            $questions = json_decode($ex->exercise_data, true);
+
+            // Récupération dynamique du nom du chapitre
+            $chapter_name = "Annales"; // Valeur par défaut
+
+            if ($ex->notion_id > 0) {
+                // On va chercher le terme de la taxonomie 'chapitre' lié à cette notion
+                $terms = get_the_terms($ex->notion_id, 'chapitre');
+                if (!is_wp_error($terms) && !empty($terms)) {
+                    $chapter_name = $terms[0]->name;
+                }
+            }
+
+            $formatted[] = [
+                'id'        => (string)$ex->id,
+                'type'      => 'exercice',
+                'titre'     => $ex->title,
+                'level'     => $ex->difficulty ?? 'Moyen',
+                'chapitre'  => $chapter_name, //$ex->chapitre ?? 'Annales',
+                'subject_text' => $ex->subject_text,
+                'questions' => is_array($questions) ? $questions : []
+            ];
+        }
+
+        return new WP_REST_Response($formatted, 200);
     }
 
     public function get_hierarchy_data($request)

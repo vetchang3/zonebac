@@ -81,6 +81,12 @@ class Zonebac_DeepSeek_API
         {$this->get_consignes_question()}
         RÈGLE D'OR : Ne commente pas tes erreurs dans l'explication. Donne uniquement le contenu pédagogique final.
 
+        CONSIGNES DE L'EXPLICATION
+        Structure par blocs : Utilise des doubles sauts de ligne \n\n pour séparer distinctement les étapes du raisonnement.
+        Titres de sections : Encadre les titres de sections importantes avec des doubles astérisques (ex: **Analyse des limites** :).
+        Listes à puces : Utilise des tirets - pour les énumérations afin de faciliter la lecture rapide.
+
+
         FORMAT JSON ATTENDU :
         {
             \"questions\": [
@@ -225,7 +231,6 @@ class Zonebac_DeepSeek_API
             ]
         }";
 
-        error_log(sprintf("ZB API DEBUG: Niveau=%s, Matiere=%s, Chapitre=%s, Notion=%s", $classe, $matiere, $chapitre, $notion));
         return sprintf($template, $classe, $matiere, $chapitre, $notion, $count, $f, $m, $d);
     }
 
@@ -284,6 +289,11 @@ class Zonebac_DeepSeek_API
 
         {$this->get_consignes_question()}
         RÈGLE D'OR : Ne commente pas tes erreurs dans l'explication. Donne uniquement le contenu pédagogique final.
+
+        CONSIGNES DE L'EXPLICATION
+        Structure par blocs : Utilise des doubles sauts de ligne \n\n pour séparer distinctement les étapes du raisonnement.
+        Titres de sections : Encadre les titres de sections importantes avec des doubles astérisques (ex: **Analyse des limites** :).
+        Listes à puces : Utilise des tirets - pour les énumérations afin de faciliter la lecture rapide.
 
 
         FORMAT JSON ATTENDU :
