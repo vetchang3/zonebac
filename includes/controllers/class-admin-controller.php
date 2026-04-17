@@ -613,53 +613,54 @@ class Zonebac_Admin_Controller
         include_once plugin_dir_path(__FILE__) . '../../admin/views/generator-page.php';
     }
 
+    /**
+     * Vérifie si la clé X-ZoneBac-Key est présente et valide
+     */
+    private function check_internal_key($request)
+    {
+        $client_key = $request->get_header('X-ZoneBac-Key');
+        $server_key = defined('ZONEBAC_API_KEY') ? constant('ZONEBAC_API_KEY') : null;
+
+        if (!$server_key) {
+            error_log("ZONEBAC SECURITY ERROR: Clé manquante dans wp-config.php");
+            return false;
+        }
+
+        return $client_key === $server_key;
+    }
+
     public function register_rest_routes()
     {
         register_rest_route('zonebac/v1', '/get-hierarchy', [
             'methods'  => 'GET',
             'callback' => [$this, 'get_hierarchy_data'],
-            'permission_callback' => '__return_true'
-        ]);
-
-        register_rest_route('zonebac/v1', '/generate-single-exercise', [
-            'methods'  => 'POST',
-            'callback' => [$this, 'rest_generate_single_exercise'],
-            'permission_callback' => function () {
-                return current_user_can('manage_options'); // Sécurité d'expert 
-            }
+            'permission_callback' => [$this, 'check_internal_key']
         ]);
 
         register_rest_route('zonebac/v1', '/exercices', [
             'methods'  => 'GET',
             'callback' => [$this, 'get_external_exercises'],
-            'permission_callback' => function ($request) {
-                $client_key = $request->get_header('X-ZoneBac-Key');
+            'permission_callback' => [$this, 'check_internal_key']
+        ]);
 
-                // On vérifie l'existence sans déclencher d'erreur fatale [cite: 2025-11-16]
-                $server_key = defined('ZONEBAC_API_KEY') ? constant('ZONEBAC_API_KEY') : null;
-
-                if (!$server_key) {
-                    error_log("ZONEBAC SECURITY ERROR: Clé manquante dans wp-config.php");
-                    return false;
-                }
-
-                return $client_key === $server_key;
-            }
+        register_rest_route('zonebac/v1', '/questions', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_external_questions'],
+            'permission_callback' => [$this, 'check_internal_key']
         ]);
 
         register_rest_route('zonebac/v1', '/quick-quiz', [
             'methods'  => 'GET',
             'callback' => [$this, 'get_quick_quiz_data'],
-            'permission_callback' => '__return_true' // À restreindre en prod [cite: 2026-04-05]
+            'permission_callback' => [$this, 'check_internal_key']
         ]);
 
         register_rest_route('zonebac/v1', '/filter-data', [
             'methods'  => 'GET',
             'callback' => [$this, 'get_dynamic_filter_data'],
-            'permission_callback' => '__return_true' //
+            'permission_callback' => [$this, 'check_internal_key']
         ]);
     }
-
     public function get_dynamic_filter_data($request)
     {
         $type = sanitize_text_field($request->get_param('type'));
@@ -781,6 +782,42 @@ class Zonebac_Admin_Controller
                 'chapitre'  => $chapter_name, //$ex->chapitre ?? 'Annales',
                 'subject_text' => $ex->subject_text,
                 'questions' => is_array($questions) ? $questions : []
+            ];
+        }
+
+        return new WP_REST_Response($formatted, 200);
+    }
+    public function get_external_questions($request)
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'zb_questions';
+
+        // Paramètres de filtrage et pagination
+        $notion_id = intval($request->get_param('notion'));
+        $per_page  = $request->get_param('per_page') ? intval($request->get_param('per_page')) : 10;
+        $page      = $request->get_param('page') ? intval($request->get_param('page')) : 1;
+        $offset    = ($page - 1) * $per_page;
+
+        $query = "SELECT * FROM $table WHERE status = 'published'";
+        if ($notion_id > 0) {
+            $query .= $wpdb->prepare(" AND notion_id = %d", $notion_id);
+        }
+
+        $sql = $query . $wpdb->prepare(" ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset);
+        $results = $wpdb->get_results($sql);
+
+        $formatted = [];
+        foreach ($results as $q) {
+            $data = json_decode($q->question_data, true);
+            $formatted[] = [
+                'id'          => (string)$q->id,
+                'notion_id'   => $q->notion_id,
+                'difficulty'  => $q->difficulty,
+                'points'      => $q->points,
+                'question'    => $data['question'] ?? '',
+                'options'     => $data['options'] ?? [],
+                'answer'      => $data['answer'] ?? '',
+                'explanation' => $data['explanation'] ?? '',
             ];
         }
 
