@@ -616,10 +616,10 @@ class Zonebac_Admin_Controller
     /**
      * Vérifie si la clé X-ZoneBac-Key est présente et valide
      */
-    private function check_internal_key($request)
+    public function check_internal_key($request)
     {
         $client_key = $request->get_header('X-ZoneBac-Key');
-        $server_key = defined('ZONEBAC_API_KEY') ? constant('ZONEBAC_API_KEY') : null;
+        $server_key = defined('ZONEBAC_INTERNAL_KEY') ? constant('ZONEBAC_INTERNAL_KEY') : null;
 
         if (!$server_key) {
             error_log("ZONEBAC SECURITY ERROR: Clé manquante dans wp-config.php");
@@ -798,7 +798,8 @@ class Zonebac_Admin_Controller
         $page      = $request->get_param('page') ? intval($request->get_param('page')) : 1;
         $offset    = ($page - 1) * $per_page;
 
-        $query = "SELECT * FROM $table WHERE status = 'published'";
+        $query = "SELECT * FROM $table WHERE status = 'completed'";
+
         if ($notion_id > 0) {
             $query .= $wpdb->prepare(" AND notion_id = %d", $notion_id);
         }
