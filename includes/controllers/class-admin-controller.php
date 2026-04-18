@@ -99,6 +99,8 @@ class Zonebac_Admin_Controller
         // 4. Sauvegarde
         $wpdb->insert($wpdb->prefix . 'zb_exercises', [
             'notion_id'      => 0,
+            'matiere_id'     => $file_meta->matiere_id ?? 0,
+            'classe_id'      => $file_meta->classe_id ?? 0,
             'title'          => $composed['exercise_title'] ?? $section['section_title'],
             'subject_text'   => $composed['subject_text'],
             'exercise_data'  => json_encode($composed['questions'], JSON_UNESCAPED_UNICODE),
@@ -781,7 +783,11 @@ class Zonebac_Admin_Controller
                 'level'     => $ex->difficulty ?? 'Moyen',
                 'chapitre'  => $chapter_name, //$ex->chapitre ?? 'Annales',
                 'subject_text' => $ex->subject_text,
-                'questions' => is_array($questions) ? $questions : []
+                'questions' => is_array($questions) ? $questions : [],
+                'notionId'     => (string)$ex->notion_id,
+                'matiereId'    => (string)($ex->matiere_id ?? ''),
+                'chapitreId'   => (string)($ex->chapitre_id ?? ''),
+                'classeId'     => (string)($ex->classe_id ?? '')
             ];
         }
 
@@ -1100,5 +1106,34 @@ class Zonebac_Admin_Controller
             echo "Exercice introuvable.";
         }
         wp_die();
+    }
+
+    /**
+     * Sauvegarde un exercice en héritant de la hiérarchie de la notion
+     */
+    public function save_new_exercise($notion_id, $title, $data)
+    {
+        global $wpdb;
+
+        // 1. On récupère la hiérarchie parente depuis la notion [cite: 2025-11-16]
+        // Note : Tu devras adapter cette requête selon ta table de notions/taxonomies
+        $hierarchy = $wpdb->get_row($wpdb->prepare(
+            "SELECT matiere_id, chapitre_id, classe_id FROM {$wpdb->prefix}zb_notions WHERE id = %d",
+            $notion_id
+        ));
+
+        // 2. On insère l'exercice avec TOUTES ses étiquettes [cite: 2026-04-18]
+        $wpdb->insert(
+            $wpdb->prefix . 'zb_exercises',
+            array(
+                'notion_id'    => $notion_id,
+                'matiere_id'   => $hierarchy->matiere_id ?? null,
+                'chapitre_id'  => $hierarchy->chapitre_id ?? null,
+                'classe_id'    => $hierarchy->classe_id ?? null,
+                'title'        => $title,
+                'exercise_data' => json_encode($data),
+                'created_at'   => current_time('mysql')
+            )
+        );
     }
 }

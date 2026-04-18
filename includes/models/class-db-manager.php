@@ -147,7 +147,10 @@ class Zonebac_DB_Manager
         $cols_ex = [
             'total_points'   => "ADD COLUMN total_points int(11) DEFAULT 0 AFTER exercise_data",
             'difficulty'     => "ADD COLUMN difficulty varchar(50) DEFAULT 'Moyen' AFTER total_points",
-            'origin_file_id' => "ADD COLUMN origin_file_id bigint(20) DEFAULT NULL AFTER difficulty"
+            'origin_file_id' => "ADD COLUMN origin_file_id bigint(20) DEFAULT NULL AFTER difficulty",
+            'matiere_id'     => "ADD COLUMN matiere_id bigint(20) DEFAULT NULL AFTER notion_id",
+            'chapitre_id'    => "ADD COLUMN chapitre_id bigint(20) DEFAULT NULL AFTER matiere_id",
+            'classe_id'      => "ADD COLUMN classe_id bigint(20) DEFAULT NULL AFTER chapitre_id"
         ];
 
         foreach ($cols_ex as $col_name => $sql_part) {
