@@ -642,7 +642,7 @@ class Zonebac_Admin_Controller
         register_rest_route('zonebac/v1', '/exercices', [
             'methods'  => 'GET',
             'callback' => [$this, 'get_external_exercises'],
-            'permission_callback' => [$this, 'check_internal_key']
+            'permission_callback' => '__return_true'
         ]);
 
         register_rest_route('zonebac/v1', '/questions', [
