@@ -662,6 +662,31 @@ class Zonebac_Admin_Controller
             'callback' => [$this, 'get_dynamic_filter_data'],
             'permission_callback' => [$this, 'check_internal_key']
         ]);
+
+        register_rest_route('zonebac/v1', '/classes', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_public_classes'],
+            'permission_callback' => '__return_true'
+        ]);
+    }
+    public function get_public_classes()
+    {
+        // On récupère les termes de la taxonomie 'classe'
+        $terms = get_terms([
+            'taxonomy'   => 'classe',
+            'hide_empty' => false,
+        ]);
+
+        if (is_wp_error($terms)) {
+            return new WP_Error('no_classes', 'Aucune classe trouvée', ['status' => 404]);
+        }
+
+        return array_map(function ($t) {
+            return [
+                'id'   => (string)$t->term_id,
+                'nom'  => $t->name
+            ];
+        }, $terms);
     }
     public function get_dynamic_filter_data($request)
     {
