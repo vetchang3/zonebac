@@ -58,6 +58,7 @@ class Zonebac_Admin_Controller
             header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
             header('Access-Control-Allow-Credentials: true');
             header('Access-Control-Allow-Headers: Authorization, Content-Type, X-ZoneBac-Key');
+
             return $value;
         });
     }
