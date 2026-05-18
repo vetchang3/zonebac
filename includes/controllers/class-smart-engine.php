@@ -96,30 +96,74 @@ class Zonebac_Smart_Engine
         ]);
     }
 
-    public static function map_notions_relations_with_ai()
+    public static function map_notions_relations_with_ai($specific_notion_id = 0)
     {
         global $wpdb;
 
-        // 1. Récupérer TOUTES les notions existantes pour servir de référentiel [cite: 2025-11-16]
+        // 1. Récupérer le référentiel complet des notions existantes pour que l'IA choisisse dedans
         $all_notions = get_posts(['post_type' => 'notion', 'numberposts' => -1, 'post_status' => 'publish']);
+        if (empty($all_notions)) return;
+
         $ref_list = implode(', ', wp_list_pluck($all_notions, 'post_title'));
 
-        // 2. Cibler uniquement les notions qui n'ont pas encore de liens (notre cache SQL)
-        $table_rel = $wpdb->prefix . 'zb_notion_relations';
-        $to_scan = $wpdb->get_results("SELECT ID, post_title FROM {$wpdb->posts} 
-        WHERE post_type = 'notion' AND post_status = 'publish' 
-        AND ID NOT IN (SELECT notion_id FROM $table_rel) LIMIT 5");
+        // 2. Sélectionner les notions à analyser
+        if ($specific_notion_id > 0) {
+            $to_scan = [$wpdb->get_row($wpdb->prepare("SELECT ID, post_title FROM {$wpdb->posts} WHERE ID = %d", $specific_notion_id))];
+        } else {
+            // Scan par lot de 5 pour le cron de fond
+            $table_prereqs = $wpdb->prefix . 'zb_notion_prerequisites';
+            $to_scan = $wpdb->get_results("SELECT ID, post_title FROM {$wpdb->posts} 
+                WHERE post_type = 'notion' AND post_status = 'publish' 
+                AND ID NOT IN (SELECT notion_id FROM $table_prereqs) LIMIT 5");
+        }
 
         foreach ($to_scan as $notion) {
-            $prompt = "Voici une notion cible : '{$notion->post_title}'. 
-        Choisis EXCLUSIVEMENT dans cette liste de notions existantes les 2 plus complémentaires pour un exercice de synthèse :
-        [$ref_list].
-        Réponds au format JSON : {\"relations\": [{\"notion_suggeree\": \"NOM_EXACT\"}]}";
+            if (!$notion) continue;
 
-            $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt);
+            $prompt = "Tu es le Directeur Pédagogique de l'application ZoneBac. 
+            Analyse la notion suivante : '{$notion->post_title}'.
+
+            MISSIONS :
+            1. COEFFICIENT : Évalue l'importance de cette notion pour les épreuves écrites du Baccalauréat (Séries Scientifiques et Générales). Attribue une note de 1 (rare/faible impact) à 7 (notion centrale incontournable, ex: Dérivées, Intégrales, Fonctions).
+            2. PRÉREQUIS : Sélectionne dans la liste suivante les notions STRICTEMENT NÉCESSAIRES qu'un élève doit maîtriser AVANT d'aborder la notion cible. Choisis au maximum 3 notions, uniquement issues de la liste fournie.
+
+            LISTE DES NOTIONS DISPONIBLES : [$ref_list]
+
+            RÉPONDS EXCLUSIVEMENT AU FORMAT JSON STRICT :
+            {
+                \"coefficient\": 5,
+                \"prerequisites\": [\"NOM_EXACT_NOTION_1\", \"NOM_EXACT_NOTION_2\"]
+            }";
+
+            $response = Zonebac_DeepSeek_API::call_deepseek_raw($prompt, true);
             if ($response) {
                 $data = json_decode(preg_replace('/^```json|```$/m', '', $response), true);
-                self::save_ai_relations($notion->ID, $data);
+                if ($data) {
+                    // A. Sauvegarde du coefficient dans les Meta WordPress
+                    $coeff = isset($data['coefficient']) ? min(7, max(1, intval($data['coefficient']))) : 1;
+                    update_post_meta($notion->ID, 'zb_coefficient', $coeff);
+
+                    // B. Sauvegarde des prérequis dans la table SQL
+                    $table_p = $wpdb->prefix . 'zb_notion_prerequisites';
+                    $wpdb->delete($table_p, ['notion_id' => $notion->ID]); // Nettoyage
+
+                    if (!empty($data['prerequisites']) && is_array($data['prerequisites'])) {
+                        foreach ($data['prerequisites'] as $prereq_name) {
+                            $prereq_id = $wpdb->get_var($wpdb->prepare(
+                                "SELECT ID FROM {$wpdb->posts} WHERE post_type = 'notion' AND post_status = 'publish' AND post_title LIKE %s LIMIT 1",
+                                '%' . $wpdb->esc_like(trim($prereq_name)) . '%'
+                            ));
+
+                            if ($prereq_id && $prereq_id != $notion->ID) {
+                                $wpdb->insert($table_p, [
+                                    'notion_id' => $notion->ID,
+                                    'prerequisite_notion_id' => $prereq_id
+                                ]);
+                                error_log("SRA Mapping: PRÉREQUIS CRÉÉ : [{$notion->post_title}] dépend de [" . get_the_title($prereq_id) . "]");
+                            }
+                        }
+                    }
+                }
             }
         }
     }

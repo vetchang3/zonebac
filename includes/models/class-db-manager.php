@@ -128,6 +128,17 @@ class Zonebac_DB_Manager
             PRIMARY KEY  (id)
         ) $charset_collate;";
 
+        // ✅ NOUVEAUTÉ : Table de jonction pour le Graphe de Prérequis du SRA
+        $table_prereqs = $wpdb->prefix . 'zb_notion_prerequisites';
+        $sql_prereqs = "CREATE TABLE $table_prereqs (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            notion_id bigint(20) NOT NULL,
+            prerequisite_notion_id bigint(20) NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY notion_prereq (notion_id, prerequisite_notion_id)
+        ) $charset_collate;";
+
+        dbDelta($sql_prereqs);
         dbDelta($sql);
         dbDelta($sql_ingestion);
         dbDelta($sql_relations);

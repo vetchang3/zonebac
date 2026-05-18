@@ -616,20 +616,33 @@ class Zonebac_Admin_Controller
         include_once plugin_dir_path(__FILE__) . '../../admin/views/generator-page.php';
     }
 
+
     /**
-     * Vérifie si la clé X-ZoneBac-Key est présente et valide
+     * Vérification de la clé de sécurité interne de ZoneBac
      */
     public function check_internal_key($request)
     {
-        $client_key = $request->get_header('X-ZoneBac-Key');
-        $server_key = defined('ZONEBAC_INTERNAL_KEY') ? constant('ZONEBAC_INTERNAL_KEY') : null;
+        // ✅ PROTECTION INDUSTRIELLE : Si l'environnement est local, on autorise d'office la communication NestJS 
+        if (defined('WP_ENVIRONMENT_TYPE') && WP_ENVIRONMENT_TYPE === 'local') {
+            return true;
+        }
 
-        if (!$server_key) {
-            error_log("ZONEBAC SECURITY ERROR: Clé manquante dans wp-config.php");
+        // 🔒 Logique stricte de production (Hetzner)
+        $headers = getallheaders();
+        $client_key = isset($headers['X-ZoneBac-Key']) ? trim($headers['X-ZoneBac-Key']) : '';
+
+        // Si getallheaders() échoue à cause d'Apache, fallback standard :
+        if (empty($client_key) && isset($_SERVER['HTTP_X_ZONEBAC_KEY'])) {
+            $client_key = trim($_SERVER['HTTP_X_ZONEBAC_KEY']);
+        }
+
+        $server_key = defined('ZONEBAC_INTERNAL_KEY') ? ZONEBAC_INTERNAL_KEY : '';
+
+        if (empty($client_key) || $client_key !== $server_key) {
             return false;
         }
 
-        return $client_key === $server_key;
+        return true;
     }
 
     public function register_rest_routes()
@@ -659,9 +672,9 @@ class Zonebac_Admin_Controller
         ]);
 
         register_rest_route('zonebac/v1', '/filter-data', [
-            'methods'  => 'GET',
-            'callback' => [$this, 'get_dynamic_filter_data'],
-            'permission_callback' => [$this, 'check_internal_key']
+            'methods'             => 'GET',
+            'callback'            => [$this, 'get_dynamic_filter_data'],
+            'permission_callback' => [$this, 'check_internal_key'],
         ]);
 
         register_rest_route('zonebac/v1', '/classes', [
@@ -669,7 +682,48 @@ class Zonebac_Admin_Controller
             'callback' => [$this, 'get_public_classes'],
             'permission_callback' => '__return_true'
         ]);
+
+        register_rest_route('zonebac/v1', '/sra-sync', [
+            'methods'  => 'GET',
+            'callback' => [$this, 'get_sra_sync_data'],
+            'permission_callback' => [$this, 'check_internal_key']
+        ]);
     }
+
+    public function get_sra_sync_data()
+    {
+        global $wpdb;
+        $notions = get_posts(['post_type' => 'notion', 'numberposts' => -1, 'post_status' => 'publish']);
+        $table_p = $wpdb->prefix . 'zb_notion_prerequisites';
+
+        $output = [];
+        foreach ($notions as $n) {
+            $coeff = get_post_meta($n->ID, 'zb_coefficient', true);
+
+            // Récupérer les IDs des prérequis
+            $prereq_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT prerequisite_notion_id FROM $table_p WHERE notion_id = %d",
+                $n->ID
+            ));
+
+            // Récupérer la matière liée via tes taxonomies WordPress
+            $matiere_terms = wp_get_post_terms($n->ID, 'matiere');
+            $chapitre_terms = wp_get_post_terms($n->ID, 'chapitre');
+
+            $output[] = [
+                'id'          => (string)$n->ID,
+                'slug'        => $n->post_name,
+                'name'        => $n->post_title,
+                'coefficient' => $coeff ? intval($coeff) : 1,
+                'matiereId'   => !empty($matiere_terms) ? (string)$matiere_terms[0]->term_id : '0',
+                'chapitreId'  => !empty($chapitre_terms) ? (string)$chapitre_terms[0]->term_id : '0',
+                'prerequisites' => array_map('stringval', $prereq_ids)
+            ];
+        }
+
+        return new WP_REST_Response($output, 200);
+    }
+
     public function get_public_classes()
     {
         // On récupère les termes de la taxonomie 'classe'
